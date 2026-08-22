@@ -171,7 +171,8 @@ public struct ProxyAirPrintServer {
 
         let queue = DispatchQueue(
             label: "com.danielraffel.printerbridge.proxy",
-            qos: .userInitiated
+            qos: .userInitiated,
+            attributes: .concurrent
         )
         let handler = ProxyAirPrintRequestHandler(
             advertisementPlan: advertisementPlan,
@@ -263,10 +264,16 @@ public struct PrintJobSubmissionResult: Equatable, Sendable {
 public struct PrintJobOptions: Equatable, Sendable {
     public let cupsOptions: [String: String]
     public let copies: Int?
+    public let fillsBorderlessPhotoMedia: Bool
 
-    public init(cupsOptions: [String: String] = [:], copies: Int? = nil) {
+    public init(
+        cupsOptions: [String: String] = [:],
+        copies: Int? = nil,
+        fillsBorderlessPhotoMedia: Bool = false
+    ) {
         self.cupsOptions = cupsOptions
         self.copies = copies
+        self.fillsBorderlessPhotoMedia = fillsBorderlessPhotoMedia
     }
 }
 
@@ -285,6 +292,7 @@ enum PrintJobOptionResolver {
            media.choices.contains(where: { $0.ippKeyword == flatMedia }) {
             selectedType = flatMedia
         }
+        let hasExplicitMediaType = selectedType != nil
 
         var selectedSize = mediaCollection?.firstStringValue(named: "media-size-name")
         if selectedSize == nil, let flatMedia,
@@ -331,7 +339,12 @@ enum PrintJobOptionResolver {
             resolution.x <= 180 ? 3 : (resolution.x <= 360 ? 4 : 5)
         }
         let requestedQuality = request.firstIntegerValue(named: "print-quality") ?? resolutionQuality
-        let photoJob = selectedMedia?.isPhotoMedia == true || contentOptimize == "photo" || photoSized
+        let photoJob = selectedMedia?.isPhotoMedia == true
+            || contentOptimize == "photo"
+            || (!hasExplicitMediaType && selectedMedia == nil && photoSized)
+        let shouldFillPhotoContent = selectedMedia?.ippKeyword.hasPrefix("photographic-") == true
+            || contentOptimize == "photo"
+            || (!hasExplicitMediaType && selectedMedia == nil && photoSized)
         let effectiveQuality = requestedQuality ?? (photoJob ? 5 : 4)
 
         var cupsOptions: [String: String] = [:]
@@ -363,7 +376,8 @@ enum PrintJobOptionResolver {
         let colorMode = request.firstStringValue(named: "print-color-mode") ?? "color"
         cupsOptions.merge(output.colorOptions(for: colorMode)) { _, new in new }
 
-        if let scaling = request.firstStringValue(named: "print-scaling"),
+        let scaling = request.firstStringValue(named: "print-scaling")
+        if let scaling,
            ["auto", "auto-fit", "fill", "fit", "none"].contains(scaling) {
             cupsOptions["print-scaling"] = scaling
         }
@@ -375,7 +389,17 @@ enum PrintJobOptionResolver {
         }
 
         let copies = request.firstIntegerValue(named: "copies").flatMap { (1...999).contains($0) ? $0 : nil }
-        return PrintJobOptions(cupsOptions: cupsOptions, copies: copies)
+        let fillsBorderlessPhotoMedia = shouldFillPhotoContent
+            && resolvedSize?.isBorderless == true
+            && (scaling == nil || scaling == "auto" || scaling == "fill")
+        if fillsBorderlessPhotoMedia, scaling == nil {
+            cupsOptions["print-scaling"] = "fill"
+        }
+        return PrintJobOptions(
+            cupsOptions: cupsOptions,
+            copies: copies,
+            fillsBorderlessPhotoMedia: fillsBorderlessPhotoMedia
+        )
     }
 
     private static func isCommonPhotoSize(_ size: PrinterMediaSize) -> Bool {
@@ -401,6 +425,78 @@ enum PrintJobOptionResolver {
         let height = quarterTurns == 1 ? mediaBox.width : mediaBox.height
         guard abs(width - height) > 0.5 else { return nil }
         return width > height ? 4 : 3
+    }
+}
+
+enum PrintJobValidator {
+    static func validationError(
+        request: IPPRequest,
+        media: PrinterMediaCapabilities,
+        output: PrinterOutputCapabilities,
+        documentFormats: [String]
+    ) -> IPPStatusCode? {
+        if let format = request.firstStringValue(named: "document-format"),
+           !documentFormats.contains(format) {
+            return .clientErrorDocumentFormatNotSupported
+        }
+
+        if let flatMedia = request.firstStringValue(named: "media"),
+           !media.sizes.contains(where: { $0.ippKeyword == flatMedia }),
+           !media.choices.contains(where: { $0.ippKeyword == flatMedia }) {
+            return .clientErrorAttributesOrValuesNotSupported
+        }
+
+        if let mediaCollection = request.firstCollectionValue(named: "media-col") {
+            if let type = mediaCollection.firstStringValue(named: "media-type"),
+               !media.choices.contains(where: { $0.ippKeyword == type }) {
+                return .clientErrorAttributesOrValuesNotSupported
+            }
+            if let sizeName = mediaCollection.firstStringValue(named: "media-size-name"),
+               !media.sizes.contains(where: { $0.ippKeyword == sizeName }) {
+                return .clientErrorAttributesOrValuesNotSupported
+            }
+            if let size = mediaCollection.firstCollectionValue(named: "media-size"),
+               let x = size.firstIntegerValue(named: "x-dimension"),
+               let y = size.firstIntegerValue(named: "y-dimension"),
+               !media.sizes.contains(where: {
+                   abs($0.xDimension - x) <= 50 && abs($0.yDimension - y) <= 50
+               }) {
+                return .clientErrorAttributesOrValuesNotSupported
+            }
+        }
+
+        if let quality = request.firstIntegerValue(named: "print-quality"),
+           !(3...5).contains(quality) {
+            return .clientErrorAttributesOrValuesNotSupported
+        }
+        if let copies = request.firstIntegerValue(named: "copies"),
+           !(1...999).contains(copies) {
+            return .clientErrorAttributesOrValuesNotSupported
+        }
+        if let orientation = request.firstIntegerValue(named: "orientation-requested"),
+           !(3...6).contains(orientation) {
+            return .clientErrorAttributesOrValuesNotSupported
+        }
+        if let scaling = request.firstStringValue(named: "print-scaling"),
+           !["auto", "auto-fit", "fill", "fit", "none"].contains(scaling) {
+            return .clientErrorAttributesOrValuesNotSupported
+        }
+        if let resolution = request.firstResolutionValue(named: "printer-resolution"),
+           resolution.units != 3
+            || resolution.x != resolution.y
+            || ![180, 360, 720].contains(resolution.x) {
+            return .clientErrorAttributesOrValuesNotSupported
+        }
+        if let colorMode = request.firstStringValue(named: "print-color-mode") {
+            let supported = colorMode == "auto"
+                || (colorMode == "color" && output.supportsColor)
+                || (["monochrome", "bi-level"].contains(colorMode) && output.supportsMonochrome)
+            if !supported {
+                return .clientErrorAttributesOrValuesNotSupported
+            }
+        }
+
+        return nil
     }
 }
 
@@ -435,7 +531,10 @@ public struct PrintJobSubmissionService {
         let temporaryFileURL = temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension(fileExtension)
-        try documentData.write(to: temporaryFileURL, options: .atomic)
+        let submittedDocumentData = options.fillsBorderlessPhotoMedia
+            ? BorderlessPhotoPDFProcessor.fillWhitePaddedPages(in: documentData)
+            : documentData
+        try submittedDocumentData.write(to: temporaryFileURL, options: .atomic)
         defer {
             try? fileManager.removeItem(at: temporaryFileURL)
         }
@@ -550,7 +649,7 @@ private final class ProxyAirPrintServerState: @unchecked Sendable {
     }
 }
 
-private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
+final class ProxyAirPrintRequestHandler: @unchecked Sendable {
     private struct CapabilitySnapshot {
         let attributes: IPPPrinterAttributesSnapshot?
         let inspection: PrinterQueueInspection?
@@ -633,6 +732,19 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
                 assembler.append(data)
             }
 
+            if assembler.exceededSizeLimit {
+                self.send(
+                    response: .text(
+                        statusCode: 413,
+                        reasonPhrase: "Content Too Large",
+                        body: "AirPrint request exceeds the Printer Bridge size limit."
+                    ),
+                    on: connection,
+                    queue: queue
+                )
+                return
+            }
+
             if assembler.shouldSendContinue {
                 assembler.markContinueSent()
                 self.sendRawHTTPResponse(
@@ -710,6 +822,15 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
             )
         case .validateJob:
             outputHandler?("[proxy] Validate-Job for \(queueName)")
+            let capabilities = capabilities(forQueueNamed: queueName)
+            if let statusCode = PrintJobValidator.validationError(
+                request: ippRequest,
+                media: capabilities.media,
+                output: capabilities.output,
+                documentFormats: preferredDocumentFormats(from: capabilities.attributes)
+            ) {
+                return makeSimpleResponse(requestID: ippRequest.requestID, statusCode: statusCode)
+            }
             return makeSimpleResponse(
                 requestID: ippRequest.requestID,
                 statusCode: .successfulOK
@@ -718,6 +839,14 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
             let jobName = ippRequest.firstStringValue(named: "job-name")
             let documentFormat = ippRequest.firstStringValue(named: "document-format")
             let capabilities = capabilities(forQueueNamed: queueName)
+            if let statusCode = PrintJobValidator.validationError(
+                request: ippRequest,
+                media: capabilities.media,
+                output: capabilities.output,
+                documentFormats: preferredDocumentFormats(from: capabilities.attributes)
+            ) {
+                return makeSimpleResponse(requestID: ippRequest.requestID, statusCode: statusCode)
+            }
             let jobOptions = PrintJobOptionResolver.resolve(
                 request: ippRequest,
                 media: capabilities.media,
@@ -991,7 +1120,7 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
             attributes += [
                 .init(name: "media-supported", values: media.sizes.map { .keyword($0.ippKeyword) }),
                 .init(name: "media-size-supported", values: media.sizes.map {
-                    .collection(dimensionMembers(for: $0))
+                    .collection(Self.dimensionMembers(for: $0))
                 }),
             ]
         }
@@ -1028,12 +1157,12 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
         ))
 
         if let defaultSize {
-            let defaultCollection = mediaCollectionMembers(size: defaultSize, typeKeyword: defaultType)
+            let defaultCollection = Self.mediaCollectionMembers(size: defaultSize, typeKeyword: defaultType)
             attributes.append(.init(name: "media-col-default", values: [.collection(defaultCollection)]))
         }
 
         if !media.sizes.isEmpty {
-            let database = compactMediaDatabase(
+            let database = Self.compactMediaDatabase(
                 media: media,
                 typeKeywords: typeKeywords,
                 defaultType: defaultType,
@@ -1086,22 +1215,24 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
         return attributes
     }
 
-    private func compactMediaDatabase(
+    static func compactMediaDatabase(
         media: PrinterMediaCapabilities,
         typeKeywords: [String],
         defaultType: String?,
         defaultSize: PrinterMediaSize?
     ) -> [IPPResponseValue] {
         var combinations: [(PrinterMediaSize, String?)] = media.sizes.map { ($0, defaultType) }
-        let featuredSizeKeywords = [
-            "na_index-4x6_4x6in",
-            "na_5x7_5x7in",
-            "na_index-5x8_5x8in",
-            "na_govt-letter_8x10in",
-            "oe_photo-l_3.5x5in",
+        let featuredDimensions = [
+            (8890, 12700),   // 3.5 x 5 inches
+            (10160, 15240),  // 4 x 6 inches
+            (12700, 17780),  // 5 x 7 inches
+            (12700, 20320),  // 5 x 8 inches
+            (20320, 25400),  // 8 x 10 inches
         ]
-        let featuredSizes = [defaultSize].compactMap { $0 } + featuredSizeKeywords.compactMap { keyword in
-            media.sizes.first(where: { $0.ippKeyword == keyword })
+        let featuredSizes = [defaultSize].compactMap { $0 } + media.sizes.filter { size in
+            featuredDimensions.contains { width, height in
+                abs(size.xDimension - width) <= 50 && abs(size.yDimension - height) <= 50
+            }
         }
 
         for size in featuredSizes {
@@ -1116,7 +1247,7 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
         }
     }
 
-    private func mediaCollectionMembers(
+    private static func mediaCollectionMembers(
         size: PrinterMediaSize,
         typeKeyword: String?
     ) -> [IPPResponseCollectionMember] {
@@ -1134,7 +1265,7 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
         return members
     }
 
-    private func mediaSizeMembers(for size: PrinterMediaSize) -> [IPPResponseCollectionMember] {
+    private static func mediaSizeMembers(for size: PrinterMediaSize) -> [IPPResponseCollectionMember] {
         [
             .init(
                 name: "media-size",
@@ -1143,7 +1274,7 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
         ]
     }
 
-    private func dimensionMembers(for size: PrinterMediaSize) -> [IPPResponseCollectionMember] {
+    private static func dimensionMembers(for size: PrinterMediaSize) -> [IPPResponseCollectionMember] {
         [
             .init(name: "x-dimension", values: [.integer(size.xDimension)]),
             .init(name: "y-dimension", values: [.integer(size.yDimension)]),
@@ -1318,15 +1449,41 @@ private struct HTTPOutboundResponse {
 }
 
 final class HTTPRequestAssembler: @unchecked Sendable {
+    static let maximumHeaderByteCount = 64 * 1024
+    static let maximumBodyByteCount = 100 * 1024 * 1024
+
     private var buffer = Data()
     private var header: HTTPParsedHeader?
     private var sentContinue = false
+    private(set) var exceededSizeLimit = false
 
     func append(_ data: Data) {
+        guard !exceededSizeLimit else { return }
+        let maximumRequestByteCount = Self.maximumHeaderByteCount + Self.maximumBodyByteCount
+        guard data.count <= maximumRequestByteCount,
+              buffer.count <= maximumRequestByteCount - data.count else {
+            exceededSizeLimit = true
+            buffer.removeAll(keepingCapacity: false)
+            return
+        }
         buffer.append(data)
+        if header == nil,
+           buffer.range(of: Data("\r\n\r\n".utf8)) == nil,
+           buffer.count > Self.maximumHeaderByteCount {
+            exceededSizeLimit = true
+            buffer.removeAll(keepingCapacity: false)
+            return
+        }
+        if let header = parsedHeaderIfNeeded(),
+           header.headerLength > Self.maximumHeaderByteCount
+            || (!header.usesChunkedTransferEncoding && header.contentLength > Self.maximumBodyByteCount) {
+            exceededSizeLimit = true
+            buffer.removeAll(keepingCapacity: false)
+        }
     }
 
     var shouldSendContinue: Bool {
+        guard !exceededSizeLimit else { return false }
         guard let header = parsedHeaderIfNeeded() else {
             return false
         }
@@ -1339,13 +1496,17 @@ final class HTTPRequestAssembler: @unchecked Sendable {
     }
 
     func takeRequest() -> HTTPInboundRequest? {
+        guard !exceededSizeLimit else { return nil }
         guard let header = parsedHeaderIfNeeded() else {
             return nil
         }
 
         if header.usesChunkedTransferEncoding {
             let encodedBody = buffer.subdata(in: header.headerLength..<buffer.count)
-            guard let body = Self.decodeChunkedBody(encodedBody) else {
+            guard let body = Self.decodeChunkedBody(
+                encodedBody,
+                maximumDecodedByteCount: Self.maximumBodyByteCount
+            ) else {
                 return nil
             }
 
@@ -1384,7 +1545,10 @@ final class HTTPRequestAssembler: @unchecked Sendable {
         return parsed
     }
 
-    private static func decodeChunkedBody(_ data: Data) -> Data? {
+    private static func decodeChunkedBody(
+        _ data: Data,
+        maximumDecodedByteCount: Int
+    ) -> Data? {
         let lineEnding = Data("\r\n".utf8)
         let trailerEnding = Data("\r\n\r\n".utf8)
         var cursor = 0
@@ -1425,6 +1589,9 @@ final class HTTPRequestAssembler: @unchecked Sendable {
             }
             let chunkEnd = cursor + chunkSize
             guard data[chunkEnd] == 0x0D, data[chunkEnd + 1] == 0x0A else {
+                return nil
+            }
+            guard chunkSize <= maximumDecodedByteCount - decoded.count else {
                 return nil
             }
             decoded.append(data.subdata(in: cursor..<chunkEnd))
@@ -1522,6 +1689,8 @@ public enum IPPStatusCode: UInt16, Sendable {
     case successfulOK = 0x0000
     case clientErrorBadRequest = 0x0400
     case clientErrorNotFound = 0x0406
+    case clientErrorDocumentFormatNotSupported = 0x040A
+    case clientErrorAttributesOrValuesNotSupported = 0x040B
     case serverErrorInternalError = 0x0500
     case serverErrorOperationNotSupported = 0x0501
 }
@@ -1842,6 +2011,10 @@ public struct IPPResponse: Sendable, Equatable {
 }
 
 public enum IPPRequestParser {
+    private static let maximumCollectionDepth = 8
+    private static let maximumAttributeCount = 2_048
+    private static let maximumCollectionMemberCount = 512
+
     public static func parse(_ data: Data) throws -> IPPRequest {
         guard data.count >= 8 else {
             throw IPPRequestParserError.messageTooShort
@@ -1861,6 +2034,7 @@ public enum IPPRequestParser {
         var currentGroupTag: IPPAttributeGroupTag?
         var currentAttributes: [IPPRequestAttribute] = []
         var currentAttributeName: String?
+        var parsedAttributeCount = 0
 
         while cursor < data.count {
             let tag = data[cursor]
@@ -1936,7 +2110,7 @@ public enum IPPRequestParser {
                 guard valueData.isEmpty else {
                     throw IPPRequestParserError.malformedAttribute
                 }
-                let collection = try parseCollection(data, cursor: &cursor)
+                let collection = try parseCollection(data, cursor: &cursor, depth: 1)
                 currentAttributes.append(.init(
                     name: name,
                     valueTag: tag,
@@ -1946,15 +2120,27 @@ public enum IPPRequestParser {
             } else {
                 currentAttributes.append(.init(name: name, valueTag: tag, valueData: valueData))
             }
+            parsedAttributeCount += 1
+            guard parsedAttributeCount <= maximumAttributeCount else {
+                throw IPPRequestParserError.malformedAttribute
+            }
         }
 
         throw IPPRequestParserError.malformedAttribute
     }
 
-    private static func parseCollection(_ data: Data, cursor: inout Int) throws -> IPPRequestCollection {
+    private static func parseCollection(
+        _ data: Data,
+        cursor: inout Int,
+        depth: Int
+    ) throws -> IPPRequestCollection {
+        guard depth <= maximumCollectionDepth else {
+            throw IPPRequestParserError.malformedAttribute
+        }
         var memberOrder: [String] = []
         var memberValues: [String: [IPPRequestCollectionValue]] = [:]
         var currentMemberName: String?
+        var parsedMemberValueCount = 0
 
         while cursor < data.count {
             let tag = data[cursor]
@@ -2011,7 +2197,7 @@ public enum IPPRequestParser {
                 guard valueData.isEmpty else {
                     throw IPPRequestParserError.malformedAttribute
                 }
-                value = .collection(try parseCollection(data, cursor: &cursor))
+                value = .collection(try parseCollection(data, cursor: &cursor, depth: depth + 1))
             } else if tag == 0x21 || tag == 0x23 {
                 guard valueData.count == 4, let rawValue = valueData.readUInt32BE(at: 0) else {
                     throw IPPRequestParserError.malformedAttribute
@@ -2024,6 +2210,10 @@ public enum IPPRequestParser {
                 value = .string(string, valueTag: tag)
             }
             memberValues[currentMemberName, default: []].append(value)
+            parsedMemberValueCount += 1
+            guard parsedMemberValueCount <= maximumCollectionMemberCount else {
+                throw IPPRequestParserError.malformedAttribute
+            }
         }
 
         throw IPPRequestParserError.malformedAttribute

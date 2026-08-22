@@ -21,6 +21,7 @@ func mediaCapabilitiesTranslateDriverChoicesToStandardIPPKeywords() throws {
     *MediaType 145/Photo Paper Glossy: ""
     *EPIJ_Qual 302/Economy: ""
     *EPIJ_Qual 303/Normal: ""
+    *EPIJ_Qual 308/Draft: ""
     *EPIJ_Qual 304/Fine: ""
     *EPIJ_Qual 305/Quality: ""
     *EPIJ_Qual 306/High Quality: ""
@@ -33,6 +34,10 @@ func mediaCapabilitiesTranslateDriverChoicesToStandardIPPKeywords() throws {
     *PageSize EPKG.NMgn/10 x 15 cm (4 x 6 in) (Borderless): "<</PageSize[288.00 432.00]/ImagingBBox null>>setpagedevice"
     *EPIJ_PSrc 2/Standard: ""
     *EPIJ_PSrc 3/Borderless: ""
+    *EPIJ_Bdls 0/Off: ""
+    *EPIJ_Bdls 1/On: ""
+    *EPIJ_exmg 0/Minimum: ""
+    *EPIJ_exmg 2/Standard: ""
     *EPIJ_Size A4/A4: ""
     *EPIJ_Size EPKG/10 x 15 cm (4 x 6 in): ""
     *APPrinterPreset PlainGeneral/General on Plain paper: "
@@ -88,6 +93,7 @@ func mediaCapabilitiesTranslateDriverChoicesToStandardIPPKeywords() throws {
             .init(key: "EPIJ_Qual", displayName: "Print Quality", values: [
                 .init(value: "302", isDefault: false),
                 .init(value: "303", isDefault: true),
+                .init(value: "308", isDefault: false),
                 .init(value: "304", isDefault: false),
                 .init(value: "305", isDefault: false),
                 .init(value: "306", isDefault: false),
@@ -151,6 +157,8 @@ func mediaCapabilitiesTranslateDriverChoicesToStandardIPPKeywords() throws {
     #expect(capabilities.sizes.first { $0.ippKeyword == "iso_a4_210x297mm" }?.cupsOptions["EPIJ_PSrc"] == "2")
     #expect(capabilities.sizes.first { $0.ippKeyword == "na_index-4x6_4x6in" }?.cupsOptions["PageSize"] == "EPKG.NMgn")
     #expect(capabilities.sizes.first { $0.ippKeyword == "na_index-4x6_4x6in" }?.cupsOptions["EPIJ_PSrc"] == "3")
+    #expect(capabilities.sizes.first { $0.ippKeyword == "na_index-4x6_4x6in" }?.cupsOptions["EPIJ_Bdls"] == "1")
+    #expect(capabilities.sizes.first { $0.ippKeyword == "na_index-4x6_4x6in" }?.cupsOptions["EPIJ_exmg"] == "2")
     #expect(capabilities.sizes.first { $0.ippKeyword == "na_index-4x6_4x6in" }?.isBorderless == true)
 
     let output = PrinterMediaCapabilityService().outputCapabilities(
@@ -161,6 +169,9 @@ func mediaCapabilitiesTranslateDriverChoicesToStandardIPPKeywords() throws {
     #expect(output.generalQualityOptions[4]?["Resolution"] == "360x360dpi")
     #expect(output.generalQualityOptions[5]?["EPIJ_Qual"] == "304")
     #expect(output.generalQualityOptions[5]?["Resolution"] == "720x720dpi")
+    #expect(output.generalQualityOptions[3]?["EPIJ_Qual"] == "308")
+    #expect(output.generalQualityOptions[3]?["Resolution"] == "180x180dpi")
     #expect(output.photoNormalOptions["EPIJ_Qual"] == "305")
+    #expect(output.colorOptions(for: "color") == ["ColorModel": "RGB", "EPIJ_Ink_": "1"])
     #expect(output.colorOptions(for: "monochrome") == ["ColorModel": "Mono", "EPIJ_Ink_": "0"])
 }

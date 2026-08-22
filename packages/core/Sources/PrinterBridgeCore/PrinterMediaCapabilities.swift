@@ -64,25 +64,28 @@ public struct PrinterOutputCapabilities: Equatable, Sendable {
     public let supportsMonochrome: Bool
     public let generalQualityOptions: [Int: [String: String]]
     public let photoNormalOptions: [String: String]
+    public let colorModeOptions: [String: [String: String]]
 
     public init(
         supportsColor: Bool,
         supportsMonochrome: Bool,
         generalQualityOptions: [Int: [String: String]],
-        photoNormalOptions: [String: String]
+        photoNormalOptions: [String: String],
+        colorModeOptions: [String: [String: String]] = [:]
     ) {
         self.supportsColor = supportsColor
         self.supportsMonochrome = supportsMonochrome
         self.generalQualityOptions = generalQualityOptions
         self.photoNormalOptions = photoNormalOptions
+        self.colorModeOptions = colorModeOptions
     }
 
     public func colorOptions(for keyword: String) -> [String: String] {
         switch keyword {
         case "monochrome", "bi-level":
-            return supportsMonochrome ? ["ColorModel": "Mono", "EPIJ_Ink_": "0"] : [:]
+            return supportsMonochrome ? colorModeOptions["monochrome"] ?? [:] : [:]
         case "auto", "color":
-            return supportsColor ? ["ColorModel": "RGB", "EPIJ_Ink_": "1"] : [:]
+            return supportsColor ? colorModeOptions["color"] ?? [:] : [:]
         default:
             return [:]
         }
@@ -279,7 +282,33 @@ public struct PrinterMediaCapabilityService {
         var photoNormal: [String: String] = [:]
         if let value = qualityValue(containing: ["quality"]) { photoNormal[qualityOption?.key ?? "EPIJ_Qual"] = value }
         if let value = resolution(closestTo: 720) { photoNormal["Resolution"] = value }
-        photoNormal["EPIJ_Mode"] = "3"
+        if options.contains(where: { option in
+            option.key == "EPIJ_Mode" && option.values.contains(where: { $0.value == "3" })
+        }) {
+            photoNormal["EPIJ_Mode"] = "3"
+        }
+
+        var colorModeOptions: [String: [String: String]] = [:]
+        if let colorModel = options.first(where: { $0.key == "ColorModel" }) {
+            if let value = colorModel.values.first(where: {
+                ["rgb", "cmyk", "color"].contains($0.value.lowercased())
+            })?.value {
+                colorModeOptions["color", default: [:]][colorModel.key] = value
+            }
+            if let value = colorModel.values.first(where: {
+                ["mono", "gray", "grayscale", "black"].contains($0.value.lowercased())
+            })?.value {
+                colorModeOptions["monochrome", default: [:]][colorModel.key] = value
+            }
+        }
+        if let inkMode = options.first(where: { $0.key == "EPIJ_Ink_" }) {
+            if inkMode.values.contains(where: { $0.value == "1" }) {
+                colorModeOptions["color", default: [:]][inkMode.key] = "1"
+            }
+            if inkMode.values.contains(where: { $0.value == "0" }) {
+                colorModeOptions["monochrome", default: [:]][inkMode.key] = "0"
+            }
+        }
 
         let supportsColor = attributes?.boolValue(named: "color-supported")
             ?? options.contains(where: { $0.key == "ColorModel" && $0.values.contains(where: { $0.value == "RGB" }) })
@@ -292,7 +321,8 @@ public struct PrinterMediaCapabilityService {
             supportsColor: supportsColor,
             supportsMonochrome: supportsMonochrome,
             generalQualityOptions: [3: draft, 4: normal, 5: high],
-            photoNormalOptions: photoNormal
+            photoNormalOptions: photoNormal,
+            colorModeOptions: colorModeOptions
         )
     }
 
@@ -376,6 +406,8 @@ public struct PrinterMediaCapabilityService {
         let pageSizes = ppdPageSizes(ppdContents)
         let epsonSizeLabels = choiceLabels(forOptionKey: "EPIJ_Size", in: ppdContents)
         let epsonPageSourceLabels = choiceLabels(forOptionKey: "EPIJ_PSrc", in: ppdContents)
+        let epsonBorderlessLabels = choiceLabels(forOptionKey: "EPIJ_Bdls", in: ppdContents)
+        let epsonExpansionLabels = choiceLabels(forOptionKey: "EPIJ_exmg", in: ppdContents)
 
         return sizes.map { size in
             let zeroMargins = size.bottomMargin == 0 && size.leftMargin == 0
@@ -392,11 +424,11 @@ public struct PrinterMediaCapabilityService {
             let epsonSizeValue = epsonSizeLabels.first(where: {
                 normalizedSizeLabel($0.value) == normalizedPageLabel
             })?.key
-            var options = [
-                "PageSize": pageSize.value,
-                "EPIJ_Bdls": pageSize.isBorderless ? "1" : "0",
-            ]
-            if pageSize.isBorderless {
+            var options = ["PageSize": pageSize.value]
+            if !epsonBorderlessLabels.isEmpty {
+                options["EPIJ_Bdls"] = pageSize.isBorderless ? "1" : "0"
+            }
+            if pageSize.isBorderless, !epsonExpansionLabels.isEmpty {
                 options["EPIJ_exmg"] = "2"
             }
             let pageSourceLabel = pageSize.isBorderless ? "borderless" : "standard"
