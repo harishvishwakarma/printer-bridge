@@ -4,11 +4,21 @@ public struct PrinterMediaChoice: Equatable, Sendable {
     public let ippKeyword: String
     public let displayName: String
     public let cupsOptions: [String: String]
+    public let photoPresetOptions: [String: String]
+    public let isPhotoMedia: Bool
 
-    public init(ippKeyword: String, displayName: String, cupsOptions: [String: String]) {
+    public init(
+        ippKeyword: String,
+        displayName: String,
+        cupsOptions: [String: String],
+        photoPresetOptions: [String: String] = [:],
+        isPhotoMedia: Bool = false
+    ) {
         self.ippKeyword = ippKeyword
         self.displayName = displayName
         self.cupsOptions = cupsOptions
+        self.photoPresetOptions = photoPresetOptions
+        self.isPhotoMedia = isPhotoMedia
     }
 }
 
@@ -20,6 +30,9 @@ public struct PrinterMediaSize: Equatable, Sendable {
     public let leftMargin: Int
     public let rightMargin: Int
     public let topMargin: Int
+    public let displayName: String
+    public let cupsOptions: [String: String]
+    public let isBorderless: Bool
 
     public init(
         ippKeyword: String,
@@ -28,7 +41,10 @@ public struct PrinterMediaSize: Equatable, Sendable {
         bottomMargin: Int = 0,
         leftMargin: Int = 0,
         rightMargin: Int = 0,
-        topMargin: Int = 0
+        topMargin: Int = 0,
+        displayName: String? = nil,
+        cupsOptions: [String: String] = [:],
+        isBorderless: Bool = false
     ) {
         self.ippKeyword = ippKeyword
         self.xDimension = xDimension
@@ -37,6 +53,39 @@ public struct PrinterMediaSize: Equatable, Sendable {
         self.leftMargin = leftMargin
         self.rightMargin = rightMargin
         self.topMargin = topMargin
+        self.displayName = displayName ?? ippKeyword
+        self.cupsOptions = cupsOptions
+        self.isBorderless = isBorderless
+    }
+}
+
+public struct PrinterOutputCapabilities: Equatable, Sendable {
+    public let supportsColor: Bool
+    public let supportsMonochrome: Bool
+    public let generalQualityOptions: [Int: [String: String]]
+    public let photoNormalOptions: [String: String]
+
+    public init(
+        supportsColor: Bool,
+        supportsMonochrome: Bool,
+        generalQualityOptions: [Int: [String: String]],
+        photoNormalOptions: [String: String]
+    ) {
+        self.supportsColor = supportsColor
+        self.supportsMonochrome = supportsMonochrome
+        self.generalQualityOptions = generalQualityOptions
+        self.photoNormalOptions = photoNormalOptions
+    }
+
+    public func colorOptions(for keyword: String) -> [String: String] {
+        switch keyword {
+        case "monochrome", "bi-level":
+            return supportsMonochrome ? ["ColorModel": "Mono", "EPIJ_Ink_": "0"] : [:]
+        case "auto", "color":
+            return supportsColor ? ["ColorModel": "RGB", "EPIJ_Ink_": "1"] : [:]
+        default:
+            return [:]
+        }
     }
 }
 
@@ -70,6 +119,14 @@ public struct PrinterMediaCapabilityService {
         let preference: Int
     }
 
+    private struct PPDPageSize {
+        let value: String
+        let displayName: String
+        let xDimension: Int
+        let yDimension: Int
+        let isBorderless: Bool
+    }
+
     private let fileManager: FileManager
 
     public init(fileManager: FileManager = .default) {
@@ -89,6 +146,7 @@ public struct PrinterMediaCapabilityService {
         }
 
         var candidates: [String: [String: Candidate]] = [:]
+        let photoPresets = ppdContents.map(Self.photoPresetOptionsByMediaValue) ?? [:]
         if let ppdContents {
             for option in mediaOptions {
                 let labels = Self.choiceLabels(forOptionKey: option.key, in: ppdContents)
@@ -126,10 +184,14 @@ public struct PrinterMediaCapabilityService {
         let choices = candidates.keys.sorted().compactMap { keyword -> PrinterMediaChoice? in
             guard let optionCandidates = candidates[keyword], !optionCandidates.isEmpty else { return nil }
             let preferred = optionCandidates.values.max { lhs, rhs in lhs.preference < rhs.preference }
+            let mediaValue = optionCandidates["EPIJ_Medi"]?.driverValue
+                ?? optionCandidates["MediaType"]?.driverValue
             return PrinterMediaChoice(
                 ippKeyword: keyword,
                 displayName: preferred?.displayName ?? Self.displayName(forStandardKeyword: keyword),
-                cupsOptions: optionCandidates.mapValues(\.driverValue)
+                cupsOptions: optionCandidates.mapValues(\.driverValue),
+                photoPresetOptions: mediaValue.flatMap { photoPresets[$0] } ?? [:],
+                isPhotoMedia: Self.isPhotoMediaKeyword(keyword)
             )
         }
 
@@ -144,7 +206,8 @@ public struct PrinterMediaCapabilityService {
             return Self.standardMediaTypeKeyword(for: label)
         }.first ?? Self.standardDefaultType(from: attributes)
 
-        let sizes = Self.mediaSizes(from: attributes)
+        let rawSizes = Self.mediaSizes(from: attributes)
+        let sizes = ppdContents.map { Self.enrichMediaSizes(rawSizes, ppdContents: $0) } ?? rawSizes
         let defaultSize = Self.defaultMediaSize(from: attributes, knownSizes: sizes)
 
         return PrinterMediaCapabilities(
@@ -152,6 +215,84 @@ public struct PrinterMediaCapabilityService {
             defaultTypeKeyword: defaultTypeKeyword,
             sizes: sizes,
             defaultSize: defaultSize
+        )
+    }
+
+    public func outputCapabilities(
+        attributes: IPPPrinterAttributesSnapshot?,
+        inspection: PrinterQueueInspection?
+    ) -> PrinterOutputCapabilities {
+        let options = inspection?.options ?? []
+        let ppdContents = inspection?.detail.interfacePath.flatMap { path in
+            fileManager.isReadableFile(atPath: path)
+                ? try? String(contentsOfFile: path, encoding: .utf8)
+                : nil
+        }
+        let presets = ppdContents.map(Self.printerPresets) ?? []
+        let qualityOption = options.first(where: { option in
+            option.key == "EPIJ_Qual" || option.displayName.localizedCaseInsensitiveContains("print quality")
+        })
+        let qualityLabels = ppdContents.flatMap { contents in
+            qualityOption.map { Self.choiceLabels(forOptionKey: $0.key, in: contents) }
+        } ?? [:]
+        let resolutionOption = options.first(where: { $0.key == "Resolution" })
+        let supportedResolutions = resolutionOption?.values.map(\.value) ?? []
+
+        func qualityValue(containing terms: [String]) -> String? {
+            qualityOption?.values.first(where: { choice in
+                guard let label = qualityLabels[choice.value]?.lowercased() else { return false }
+                return terms.contains(where: label.contains)
+            })?.value
+        }
+
+        func resolution(closestTo target: Int) -> String? {
+            supportedResolutions.min { lhs, rhs in
+                abs((Int(lhs.split(separator: "x").first ?? "") ?? target) - target)
+                    < abs((Int(rhs.split(separator: "x").first ?? "") ?? target) - target)
+            }
+        }
+
+        let plainGeneralPreset = presets.first(where: {
+            $0["EPIJ_Medi"] == "0" && $0["preset.graphicsType"] == "General"
+                && $0["EPIJ_Ink_"] == "1"
+        }) ?? [:]
+        let plainPhotoPreset = presets.first(where: {
+            $0["EPIJ_Medi"] == "0" && $0["preset.graphicsType"] == "Photo"
+        }) ?? [:]
+
+        var draft: [String: String] = [:]
+        if let value = qualityValue(containing: ["draft"]) { draft[qualityOption?.key ?? "EPIJ_Qual"] = value }
+        if let value = resolution(closestTo: 180) { draft["Resolution"] = value }
+
+        var normal = Self.driverOptions(fromPreset: plainGeneralPreset)
+        if normal.isEmpty, let value = qualityValue(containing: ["normal"]) {
+            normal[qualityOption?.key ?? "EPIJ_Qual"] = value
+        }
+        if normal["Resolution"] == nil, let value = resolution(closestTo: 360) { normal["Resolution"] = value }
+
+        var high = Self.driverOptions(fromPreset: plainPhotoPreset)
+        if high.isEmpty, let value = qualityValue(containing: ["fine", "high quality"]) {
+            high[qualityOption?.key ?? "EPIJ_Qual"] = value
+        }
+        if high["Resolution"] == nil, let value = resolution(closestTo: 720) { high["Resolution"] = value }
+
+        var photoNormal: [String: String] = [:]
+        if let value = qualityValue(containing: ["quality"]) { photoNormal[qualityOption?.key ?? "EPIJ_Qual"] = value }
+        if let value = resolution(closestTo: 720) { photoNormal["Resolution"] = value }
+        photoNormal["EPIJ_Mode"] = "3"
+
+        let supportsColor = attributes?.boolValue(named: "color-supported")
+            ?? options.contains(where: { $0.key == "ColorModel" && $0.values.contains(where: { $0.value == "RGB" }) })
+        let supportsMonochrome = options.contains(where: {
+            ($0.key == "ColorModel" && $0.values.contains(where: { $0.value == "Mono" }))
+                || ($0.key == "EPIJ_Ink_" && $0.values.contains(where: { $0.value == "0" }))
+        })
+
+        return PrinterOutputCapabilities(
+            supportsColor: supportsColor,
+            supportsMonochrome: supportsMonochrome,
+            generalQualityOptions: [3: draft, 4: normal, 5: high],
+            photoNormalOptions: photoNormal
         )
     }
 
@@ -180,6 +321,147 @@ public struct PrinterMediaCapabilityService {
         return labels
     }
 
+    private static func printerPresets(_ ppdContents: String) -> [[String: String]] {
+        var presets: [[String: String]] = []
+        var current: [String: String]?
+
+        for rawLine in ppdContents.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            if line.hasPrefix("*APPrinterPreset ") {
+                current = [:]
+                continue
+            }
+            guard current != nil else { continue }
+            if line == "*End" {
+                if let current { presets.append(current) }
+                current = nil
+                continue
+            }
+            if line.hasPrefix("com.apple.print.preset.graphicsType ") {
+                current?["preset.graphicsType"] = String(line.split(separator: " ").last ?? "")
+                continue
+            }
+            guard line.hasPrefix("*"), !line.hasPrefix("*EPSON.PrintModule.Setting."),
+                  !line.hasPrefix("*EPIJPrinterPreset") else {
+                continue
+            }
+            let components = line.dropFirst().split(separator: " ", maxSplits: 1).map(String.init)
+            if components.count == 2, !components[0].contains(".") {
+                current?[components[0]] = components[1]
+            }
+        }
+
+        return presets
+    }
+
+    private static func photoPresetOptionsByMediaValue(_ ppdContents: String) -> [String: [String: String]] {
+        var result: [String: [String: String]] = [:]
+        for preset in printerPresets(ppdContents)
+            where preset["preset.graphicsType"] == "Photo" {
+            guard let mediaValue = preset["EPIJ_Medi"] else { continue }
+            result[mediaValue] = driverOptions(fromPreset: preset)
+        }
+        return result
+    }
+
+    private static func driverOptions(fromPreset preset: [String: String]) -> [String: String] {
+        let allowed = ["EPIJ_Medi", "EPIJ_Ink_", "EPIJ_Mode", "EPIJ_Qual", "EPIJ_Hori", "Resolution"]
+        return preset.filter { allowed.contains($0.key) }
+    }
+
+    private static func enrichMediaSizes(
+        _ sizes: [PrinterMediaSize],
+        ppdContents: String
+    ) -> [PrinterMediaSize] {
+        let pageSizes = ppdPageSizes(ppdContents)
+        let epsonSizeLabels = choiceLabels(forOptionKey: "EPIJ_Size", in: ppdContents)
+
+        return sizes.map { size in
+            let zeroMargins = size.bottomMargin == 0 && size.leftMargin == 0
+                && size.rightMargin == 0 && size.topMargin == 0
+            let dimensionMatches = pageSizes.filter {
+                abs($0.xDimension - size.xDimension) <= 5 && abs($0.yDimension - size.yDimension) <= 5
+            }
+            let pageSize = dimensionMatches.first(where: { $0.isBorderless == zeroMargins })
+                ?? dimensionMatches.first(where: { !$0.isBorderless })
+                ?? dimensionMatches.first
+            guard let pageSize else { return size }
+
+            let normalizedPageLabel = normalizedSizeLabel(pageSize.displayName)
+            let epsonSizeValue = epsonSizeLabels.first(where: {
+                normalizedSizeLabel($0.value) == normalizedPageLabel
+            })?.key
+            var options = [
+                "PageSize": pageSize.value,
+                "EPIJ_Bdls": pageSize.isBorderless ? "1" : "0",
+            ]
+            if pageSize.isBorderless {
+                options["EPIJ_exmg"] = "2"
+            }
+            if let epsonSizeValue {
+                options["EPIJ_Size"] = epsonSizeValue
+            }
+
+            return PrinterMediaSize(
+                ippKeyword: size.ippKeyword,
+                xDimension: size.xDimension,
+                yDimension: size.yDimension,
+                bottomMargin: size.bottomMargin,
+                leftMargin: size.leftMargin,
+                rightMargin: size.rightMargin,
+                topMargin: size.topMargin,
+                displayName: decodedPPDLabel(pageSize.displayName),
+                cupsOptions: options,
+                isBorderless: pageSize.isBorderless
+            )
+        }
+    }
+
+    private static func ppdPageSizes(_ ppdContents: String) -> [PPDPageSize] {
+        let prefix = "*PageSize "
+        return ppdContents.split(separator: "\n").compactMap { rawLine in
+            let line = String(rawLine)
+            guard line.hasPrefix(prefix),
+                  let slash = line.firstIndex(of: "/"),
+                  let colon = line[slash...].firstIndex(of: ":"),
+                  let dimensionsStart = line.range(of: "/PageSize[")?.upperBound,
+                  let dimensionsEnd = line[dimensionsStart...].firstIndex(of: "]") else {
+                return nil
+            }
+            let value = line[line.index(line.startIndex, offsetBy: prefix.count)..<slash]
+                .trimmingCharacters(in: .whitespaces)
+            let displayName = String(line[line.index(after: slash)..<colon])
+            let dimensions = line[dimensionsStart..<dimensionsEnd]
+                .split(separator: " ", omittingEmptySubsequences: true)
+                .compactMap { Double($0) }
+            guard dimensions.count == 2 else { return nil }
+            return PPDPageSize(
+                value: value,
+                displayName: displayName,
+                xDimension: Int((dimensions[0] * 2540 / 72).rounded()),
+                yDimension: Int((dimensions[1] * 2540 / 72).rounded()),
+                isBorderless: displayName.localizedCaseInsensitiveContains("borderless")
+                    || value.localizedCaseInsensitiveContains("NMgn")
+            )
+        }
+    }
+
+    private static func normalizedSizeLabel(_ value: String) -> String {
+        decodedPPDLabel(value)
+            .replacingOccurrences(of: "(Borderless)", with: "", options: .caseInsensitive)
+            .lowercased()
+            .filter { $0.isLetter || $0.isNumber }
+    }
+
+    private static func decodedPPDLabel(_ value: String) -> String {
+        var result = value
+        let replacements = ["<2E>": ".", "<3A>": ":", "<2F>": "/"]
+        for (encoded, decoded) in replacements {
+            result = result.replacingOccurrences(of: encoded, with: decoded)
+        }
+        return result
+    }
+
     static func standardMediaTypeKeyword(for displayName: String) -> String? {
         let name = displayName.lowercased()
         if name.contains("letterhead") { return "stationery-letterhead" }
@@ -194,6 +476,10 @@ public struct PrinterMediaCapabilityService {
         if name.contains("photo quality") || name.contains("coated") { return "stationery-coated" }
         if name.contains("plain") { return "stationery" }
         return nil
+    }
+
+    private static func isPhotoMediaKeyword(_ keyword: String) -> Bool {
+        keyword.hasPrefix("photographic-") || keyword == "stationery-coated" || keyword == "labels"
     }
 
     private static func isMediaTypeOption(_ option: PrinterOption) -> Bool {

@@ -41,7 +41,16 @@ func ippRequestParserDecodesMediaCollection() throws {
     appendCollectionMemberName("y-dimension", to: &message)
     appendCollectionInteger(15240, to: &message)
     appendCollectionEnd(to: &message)
+    for margin in ["media-bottom-margin", "media-left-margin", "media-right-margin", "media-top-margin"] {
+        appendCollectionMemberName(margin, to: &message)
+        appendCollectionInteger(0, to: &message)
+    }
     appendCollectionEnd(to: &message)
+    appendAttribute(tag: 0x44, name: "print-color-mode", value: "monochrome", to: &message)
+    appendIntegerAttribute(name: "print-quality", value: 5, to: &message)
+    appendIntegerAttribute(name: "copies", value: 2, to: &message)
+    appendIntegerAttribute(name: "orientation-requested", value: 4, to: &message)
+    appendAttribute(tag: 0x44, name: "print-scaling", value: "fill", to: &message)
     message.append(0x03)
     message.append(Data("PHOTO".utf8))
 
@@ -60,7 +69,12 @@ func ippRequestParserDecodesMediaCollection() throws {
                 .init(
                     ippKeyword: "photographic-glossy",
                     displayName: "Photo Paper Glossy",
-                    cupsOptions: ["EPIJ_Medi": "145", "MediaType": "145"]
+                    cupsOptions: ["EPIJ_Medi": "145", "MediaType": "145"],
+                    photoPresetOptions: [
+                        "EPIJ_Medi": "145", "EPIJ_Ink_": "1", "EPIJ_Mode": "3",
+                        "EPIJ_Qual": "306", "Resolution": "720x720dpi",
+                    ],
+                    isPhotoMedia: true
                 ),
             ],
             defaultTypeKeyword: "stationery",
@@ -68,17 +82,98 @@ func ippRequestParserDecodesMediaCollection() throws {
                 .init(
                     ippKeyword: "na_index-4x6_4x6in",
                     xDimension: 10160,
-                    yDimension: 15240
+                    yDimension: 15240,
+                    cupsOptions: [
+                        "PageSize": "EPKG.NMgn", "EPIJ_Size": "EPKG",
+                        "EPIJ_Bdls": "1", "EPIJ_exmg": "2",
+                    ],
+                    isBorderless: true
                 ),
             ],
             defaultSize: nil
+        ),
+        output: PrinterOutputCapabilities(
+            supportsColor: true,
+            supportsMonochrome: true,
+            generalQualityOptions: [:],
+            photoNormalOptions: [:]
         )
     )
 
     #expect(options.cupsOptions == [
+        "ColorModel": "Mono",
+        "EPIJ_Bdls": "1",
+        "EPIJ_Ink_": "0",
         "EPIJ_Medi": "145",
+        "EPIJ_Mode": "3",
+        "EPIJ_Qual": "306",
+        "EPIJ_Size": "EPKG",
+        "EPIJ_exmg": "2",
         "MediaType": "145",
-        "media": "na_index-4x6_4x6in",
+        "PageSize": "EPKG.NMgn",
+        "Resolution": "720x720dpi",
+        "orientation-requested": "4",
+        "print-scaling": "fill",
+    ])
+    #expect(options.copies == 2)
+}
+
+@Test
+func resolverMapsPlainA4MonochromeNormalToEpsonDriverOptions() throws {
+    var message = Data([0x02, 0x00])
+    message.append(contentsOf: [0x00, 0x02])
+    message.append(contentsOf: [0x00, 0x00, 0x00, 0x2C])
+    message.append(0x02)
+    appendAttribute(tag: 0x44, name: "media", value: "iso_a4_210x297mm", to: &message)
+    appendAttribute(tag: 0x44, name: "media-type", value: "stationery", to: &message)
+    appendAttribute(tag: 0x44, name: "print-color-mode", value: "monochrome", to: &message)
+    appendIntegerAttribute(name: "print-quality", value: 4, to: &message)
+    message.append(0x03)
+    message.append(Data("A4-DOCUMENT".utf8))
+
+    let request = try IPPRequestParser.parse(message)
+    let options = PrintJobOptionResolver.resolve(
+        request: request,
+        media: PrinterMediaCapabilities(
+            choices: [
+                .init(
+                    ippKeyword: "stationery",
+                    displayName: "Plain Paper",
+                    cupsOptions: ["EPIJ_Medi": "0", "MediaType": "0"]
+                ),
+            ],
+            defaultTypeKeyword: "stationery",
+            sizes: [
+                .init(
+                    ippKeyword: "iso_a4_210x297mm",
+                    xDimension: 21000,
+                    yDimension: 29700,
+                    cupsOptions: ["PageSize": "A4", "EPIJ_Size": "A4", "EPIJ_Bdls": "0"]
+                ),
+            ],
+            defaultSize: nil
+        ),
+        output: PrinterOutputCapabilities(
+            supportsColor: true,
+            supportsMonochrome: true,
+            generalQualityOptions: [
+                4: ["EPIJ_Mode": "3", "EPIJ_Qual": "303", "Resolution": "360x360dpi"],
+            ],
+            photoNormalOptions: [:]
+        )
+    )
+
+    #expect(options.cupsOptions == [
+        "ColorModel": "Mono",
+        "EPIJ_Bdls": "0",
+        "EPIJ_Ink_": "0",
+        "EPIJ_Medi": "0",
+        "EPIJ_Mode": "3",
+        "EPIJ_Qual": "303",
+        "EPIJ_Size": "A4",
+        "MediaType": "0",
+        "PageSize": "A4",
+        "Resolution": "360x360dpi",
     ])
 }
 
@@ -135,11 +230,12 @@ func printJobSubmissionForwardsResolvedCUPSOptions() throws {
             "EPIJ_Medi": "145",
             "MediaType": "145",
             "media": "na_index-4x6_4x6in",
-        ])
+        ], copies: 3)
     )
 
     #expect(result.jobNumber == 42)
     #expect(capturedArguments.starts(with: ["-d", "Epson", "-t", "Photo"]))
+    #expect(capturedArguments.contains(["-n", "3"]))
     #expect(capturedArguments.contains(["-o", "EPIJ_Medi=145"]))
     #expect(capturedArguments.contains(["-o", "MediaType=145"]))
     #expect(capturedArguments.contains(["-o", "media=na_index-4x6_4x6in"]))
@@ -191,6 +287,16 @@ private func appendAttribute(tag: UInt8, name: String, value: String, to data: i
     data.append(nameData)
     data.append(contentsOf: [UInt8((valueData.count >> 8) & 0xff), UInt8(valueData.count & 0xff)])
     data.append(valueData)
+}
+
+private func appendIntegerAttribute(name: String, value: UInt32, to data: inout Data) {
+    let nameData = Data(name.utf8)
+    data.append(0x21)
+    appendLengthPrefixed(nameData, to: &data)
+    appendLengthPrefixed(Data([
+        UInt8((value >> 24) & 0xff), UInt8((value >> 16) & 0xff),
+        UInt8((value >> 8) & 0xff), UInt8(value & 0xff),
+    ]), to: &data)
 }
 
 private func appendCollectionStart(name: String?, to data: inout Data) {

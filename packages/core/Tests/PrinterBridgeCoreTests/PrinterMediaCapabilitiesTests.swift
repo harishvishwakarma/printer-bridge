@@ -19,6 +19,47 @@ func mediaCapabilitiesTranslateDriverChoicesToStandardIPPKeywords() throws {
     *MediaType 12/Epson Matte: ""
     *MediaType 13/Epson Premium Glossy: ""
     *MediaType 145/Photo Paper Glossy: ""
+    *EPIJ_Qual 302/Economy: ""
+    *EPIJ_Qual 303/Normal: ""
+    *EPIJ_Qual 304/Fine: ""
+    *EPIJ_Qual 305/Quality: ""
+    *EPIJ_Qual 306/High Quality: ""
+    *Resolution 180x180dpi/180 dpi: ""
+    *Resolution 360x360dpi/360 dpi: ""
+    *Resolution 720x720dpi/720 dpi: ""
+    *PageSize A4/A4: "<</PageSize[595.20 841.80]/ImagingBBox null>>setpagedevice"
+    *PageSize A4.NMgn/A4 (Borderless): "<</PageSize[595.20 841.80]/ImagingBBox null>>setpagedevice"
+    *PageSize EPKG/10 x 15 cm (4 x 6 in): "<</PageSize[288.00 432.00]/ImagingBBox null>>setpagedevice"
+    *PageSize EPKG.NMgn/10 x 15 cm (4 x 6 in) (Borderless): "<</PageSize[288.00 432.00]/ImagingBBox null>>setpagedevice"
+    *EPIJ_Size A4/A4: ""
+    *EPIJ_Size EPKG/10 x 15 cm (4 x 6 in): ""
+    *APPrinterPreset PlainGeneral/General on Plain paper: "
+    *EPIJ_Medi 0
+    *EPIJ_Ink_ 1
+    *EPIJ_Mode 3
+    *EPIJ_Qual 303
+    *Resolution 360x360dpi
+    com.apple.print.preset.graphicsType General
+    com.apple.print.preset.quality normal"
+    *End
+    *APPrinterPreset PlainPhoto/Photo on Plain paper: "
+    *EPIJ_Medi 0
+    *EPIJ_Ink_ 1
+    *EPIJ_Mode 3
+    *EPIJ_Qual 304
+    *Resolution 720x720dpi
+    com.apple.print.preset.graphicsType Photo
+    com.apple.print.preset.quality high"
+    *End
+    *APPrinterPreset GlossyPhoto/Photo on Glossy paper: "
+    *EPIJ_Medi 145
+    *EPIJ_Ink_ 1
+    *EPIJ_Mode 3
+    *EPIJ_Qual 306
+    *Resolution 720x720dpi
+    com.apple.print.preset.graphicsType Photo
+    com.apple.print.preset.quality high"
+    *End
     """.write(to: ppdURL, atomically: true, encoding: .utf8)
 
     let inspection = PrinterQueueInspection(
@@ -42,12 +83,33 @@ func mediaCapabilitiesTranslateDriverChoicesToStandardIPPKeywords() throws {
                 .init(value: "13", isDefault: false),
                 .init(value: "145", isDefault: false),
             ]),
+            .init(key: "EPIJ_Qual", displayName: "Print Quality", values: [
+                .init(value: "302", isDefault: false),
+                .init(value: "303", isDefault: true),
+                .init(value: "304", isDefault: false),
+                .init(value: "305", isDefault: false),
+                .init(value: "306", isDefault: false),
+            ]),
+            .init(key: "Resolution", displayName: "Resolution", values: [
+                .init(value: "180x180dpi", isDefault: false),
+                .init(value: "360x360dpi", isDefault: true),
+                .init(value: "720x720dpi", isDefault: false),
+            ]),
+            .init(key: "ColorModel", displayName: "Color Model", values: [
+                .init(value: "RGB", isDefault: true),
+                .init(value: "Mono", isDefault: false),
+            ]),
+            .init(key: "EPIJ_Ink_", displayName: "Grayscale", values: [
+                .init(value: "1", isDefault: true),
+                .init(value: "0", isDefault: false),
+            ]),
         ]
     )
     let attributes = IPPPrinterAttributesSnapshot(
         queueName: "Epson",
         printerURI: "ipp://localhost/printers/Epson",
         attributes: [
+            "color-supported": .init(name: "color-supported", valueType: "boolean", rawValue: "true"),
             "media-default": .init(name: "media-default", valueType: "keyword", rawValue: "iso_a4_210x297mm"),
             "media-supported": .init(
                 name: "media-supported",
@@ -80,4 +142,21 @@ func mediaCapabilitiesTranslateDriverChoicesToStandardIPPKeywords() throws {
     #expect(capabilities.cupsOptions(forIPPKeyword: "photographic-glossy") == [
         "EPIJ_Medi": "145", "MediaType": "145",
     ])
+    let glossy = capabilities.choices.first { $0.ippKeyword == "photographic-glossy" }
+    #expect(glossy?.photoPresetOptions["EPIJ_Qual"] == "306")
+    #expect(glossy?.photoPresetOptions["Resolution"] == "720x720dpi")
+    #expect(capabilities.sizes.first { $0.ippKeyword == "iso_a4_210x297mm" }?.cupsOptions["PageSize"] == "A4")
+    #expect(capabilities.sizes.first { $0.ippKeyword == "na_index-4x6_4x6in" }?.cupsOptions["PageSize"] == "EPKG.NMgn")
+    #expect(capabilities.sizes.first { $0.ippKeyword == "na_index-4x6_4x6in" }?.isBorderless == true)
+
+    let output = PrinterMediaCapabilityService().outputCapabilities(
+        attributes: attributes,
+        inspection: inspection
+    )
+    #expect(output.generalQualityOptions[4]?["EPIJ_Qual"] == "303")
+    #expect(output.generalQualityOptions[4]?["Resolution"] == "360x360dpi")
+    #expect(output.generalQualityOptions[5]?["EPIJ_Qual"] == "304")
+    #expect(output.generalQualityOptions[5]?["Resolution"] == "720x720dpi")
+    #expect(output.photoNormalOptions["EPIJ_Qual"] == "305")
+    #expect(output.colorOptions(for: "monochrome") == ["ColorModel": "Mono", "EPIJ_Ink_": "0"])
 }

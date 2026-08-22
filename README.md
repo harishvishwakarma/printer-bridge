@@ -54,6 +54,19 @@ The app consists of:
 
 Printing stays on the Mac and local network.
 
+## AirPrint options
+
+Printer Bridge translates standard AirPrint job settings into the options exposed by the selected macOS printer driver. When the driver supports them, the iPhone or iPad print sheet can offer:
+
+- Plain, coated, glossy, high-gloss, matte, semi-gloss, label, envelope, and letterhead media
+- Draft, normal, and best print quality
+- Color and monochrome printing
+- Driver-supported document and photo sizes such as A4, 4 × 6, 5 × 7, 5 × 8, and 8 × 10 inches
+- Bordered and borderless variants based on the margins requested by the printing app
+- Copies, orientation, resolution, and fit/fill scaling
+
+The available choices come from the installed driver, so they vary by printer. Photo apps commonly request a borderless size automatically; document apps normally request the bordered variant.
+
 ## Build from source
 
 Building requires:

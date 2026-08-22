@@ -261,16 +261,19 @@ public struct PrintJobSubmissionResult: Equatable, Sendable {
 
 public struct PrintJobOptions: Equatable, Sendable {
     public let cupsOptions: [String: String]
+    public let copies: Int?
 
-    public init(cupsOptions: [String: String] = [:]) {
+    public init(cupsOptions: [String: String] = [:], copies: Int? = nil) {
         self.cupsOptions = cupsOptions
+        self.copies = copies
     }
 }
 
 enum PrintJobOptionResolver {
     static func resolve(
         request: IPPRequest,
-        media: PrinterMediaCapabilities
+        media: PrinterMediaCapabilities,
+        output: PrinterOutputCapabilities
     ) -> PrintJobOptions {
         let mediaCollection = request.firstCollectionValue(named: "media-col")
         let flatMedia = request.firstStringValue(named: "media")
@@ -287,27 +290,94 @@ enum PrintJobOptionResolver {
            media.sizes.contains(where: { $0.ippKeyword == flatMedia }) {
             selectedSize = flatMedia
         }
+        var resolvedSize = selectedSize.flatMap { name in
+            media.sizes.first(where: { $0.ippKeyword == name })
+        }
         if selectedSize == nil,
            let sizeCollection = mediaCollection?.firstCollectionValue(named: "media-size"),
            let xDimension = sizeCollection.firstIntegerValue(named: "x-dimension"),
            let yDimension = sizeCollection.firstIntegerValue(named: "y-dimension") {
-            selectedSize = media.sizes.first(where: {
+            let requestedMargins = [
+                mediaCollection?.firstIntegerValue(named: "media-bottom-margin"),
+                mediaCollection?.firstIntegerValue(named: "media-left-margin"),
+                mediaCollection?.firstIntegerValue(named: "media-right-margin"),
+                mediaCollection?.firstIntegerValue(named: "media-top-margin"),
+            ]
+            let dimensionMatches = media.sizes.filter {
                 $0.xDimension == xDimension && $0.yDimension == yDimension
-            })?.ippKeyword
+            }
+            if requestedMargins.allSatisfy({ $0 != nil }) {
+                resolvedSize = dimensionMatches.first(where: {
+                    [$0.bottomMargin, $0.leftMargin, $0.rightMargin, $0.topMargin]
+                        == requestedMargins.compactMap { $0 }
+                })
+            }
+            resolvedSize = resolvedSize
+                ?? dimensionMatches.first(where: { !$0.isBorderless })
+                ?? dimensionMatches.first
+            selectedSize = resolvedSize?.ippKeyword
         }
+
+        let photoSized = resolvedSize.map(Self.isCommonPhotoSize) ?? false
+        if selectedType == nil, (photoSized || resolvedSize?.isBorderless == true) {
+            selectedType = media.choices.first(where: { $0.ippKeyword == "photographic-glossy" })?.ippKeyword
+        }
+        let selectedMedia = selectedType.flatMap { keyword in
+            media.choices.first(where: { $0.ippKeyword == keyword })
+        }
+        let contentOptimize = request.firstStringValue(named: "print-content-optimize")
+        let resolutionQuality = request.firstResolutionValue(named: "printer-resolution").map { resolution in
+            resolution.x <= 180 ? 3 : (resolution.x <= 360 ? 4 : 5)
+        }
+        let requestedQuality = request.firstIntegerValue(named: "print-quality") ?? resolutionQuality
+        let photoJob = selectedMedia?.isPhotoMedia == true || contentOptimize == "photo" || photoSized
+        let effectiveQuality = requestedQuality ?? (photoJob ? 5 : 4)
 
         var cupsOptions: [String: String] = [:]
-        if let selectedType {
-            cupsOptions.merge(media.cupsOptions(forIPPKeyword: selectedType)) { _, new in new }
-        }
-        if let selectedSize {
+        if let resolvedSize {
+            cupsOptions.merge(resolvedSize.cupsOptions) { _, new in new }
+            if resolvedSize.cupsOptions.isEmpty {
+                cupsOptions["media"] = resolvedSize.ippKeyword
+            }
+        } else if let selectedSize {
             cupsOptions["media"] = selectedSize
         }
-        if let printQuality = request.firstIntegerValue(named: "print-quality"), (3...5).contains(printQuality) {
-            cupsOptions["print-quality"] = String(printQuality)
+        if let selectedMedia {
+            cupsOptions.merge(selectedMedia.cupsOptions) { _, new in new }
         }
 
-        return PrintJobOptions(cupsOptions: cupsOptions)
+        let qualityOptions: [String: String]
+        if photoJob, effectiveQuality >= 5, let selectedMedia, !selectedMedia.photoPresetOptions.isEmpty {
+            qualityOptions = selectedMedia.photoPresetOptions
+        } else if photoJob, effectiveQuality >= 4, !output.photoNormalOptions.isEmpty {
+            qualityOptions = output.photoNormalOptions
+        } else {
+            qualityOptions = output.generalQualityOptions[effectiveQuality] ?? [:]
+        }
+        cupsOptions.merge(qualityOptions) { _, new in new }
+        if qualityOptions.isEmpty, (3...5).contains(effectiveQuality) {
+            cupsOptions["print-quality"] = String(effectiveQuality)
+        }
+
+        let colorMode = request.firstStringValue(named: "print-color-mode") ?? "color"
+        cupsOptions.merge(output.colorOptions(for: colorMode)) { _, new in new }
+
+        if let scaling = request.firstStringValue(named: "print-scaling"),
+           ["auto", "auto-fit", "fill", "fit", "none"].contains(scaling) {
+            cupsOptions["print-scaling"] = scaling
+        }
+        if let orientation = request.firstIntegerValue(named: "orientation-requested"),
+           (3...6).contains(orientation) {
+            cupsOptions["orientation-requested"] = String(orientation)
+        }
+
+        let copies = request.firstIntegerValue(named: "copies").flatMap { (1...999).contains($0) ? $0 : nil }
+        return PrintJobOptions(cupsOptions: cupsOptions, copies: copies)
+    }
+
+    private static func isCommonPhotoSize(_ size: PrinterMediaSize) -> Bool {
+        let photoKeywords = ["3.5x5", "4x6", "5x7", "5x8", "8x10", "photo"]
+        return photoKeywords.contains(where: size.ippKeyword.localizedCaseInsensitiveContains)
     }
 }
 
@@ -350,6 +420,9 @@ public struct PrintJobSubmissionService {
         var arguments = ["-d", queueName]
         if let jobName, !jobName.isEmpty {
             arguments += ["-t", jobName]
+        }
+        if let copies = options.copies {
+            arguments += ["-n", String(copies)]
         }
         for (key, value) in options.cupsOptions.sorted(by: { $0.key < $1.key }) {
             arguments += ["-o", "\(key)=\(value)"]
@@ -459,6 +532,7 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
         let attributes: IPPPrinterAttributesSnapshot?
         let inspection: PrinterQueueInspection?
         let media: PrinterMediaCapabilities
+        let output: PrinterOutputCapabilities
     }
 
     private let advertisementPlan: AirPrintAdvertisementPlan
@@ -495,7 +569,11 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
             cachedCapabilities = CapabilitySnapshot(
                 attributes: advertisementPlan.prefetchedAttributes,
                 inspection: advertisementPlan.prefetchedInspection,
-                media: media
+                media: media,
+                output: mediaCapabilityService.outputCapabilities(
+                    attributes: advertisementPlan.prefetchedAttributes,
+                    inspection: advertisementPlan.prefetchedInspection
+                )
             )
         }
     }
@@ -604,7 +682,8 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
                 request: ippRequest,
                 inspection: capabilities.inspection,
                 attributes: capabilities.attributes,
-                media: capabilities.media
+                media: capabilities.media,
+                output: capabilities.output
             )
         case .validateJob:
             outputHandler?("[proxy] Validate-Job for \(queueName)")
@@ -615,11 +694,17 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
         case .printJob:
             let jobName = ippRequest.firstStringValue(named: "job-name")
             let documentFormat = ippRequest.firstStringValue(named: "document-format")
+            let capabilities = capabilities(forQueueNamed: queueName)
             let jobOptions = PrintJobOptionResolver.resolve(
                 request: ippRequest,
-                media: capabilities(forQueueNamed: queueName).media
+                media: capabilities.media,
+                output: capabilities.output
             )
             outputHandler?("[proxy] Print-Job \(jobName ?? "(untitled)") format=\(documentFormat ?? "unknown") size=\(ippRequest.documentData.count)")
+            let renderedOptions = jobOptions.cupsOptions.sorted(by: { $0.key < $1.key })
+                .map { "\($0.key)=\($0.value)" }
+                .joined(separator: ", ")
+            outputHandler?("[proxy] Resolved options copies=\(jobOptions.copies ?? 1) \(renderedOptions)")
 
             do {
                 let submission = try submissionService.submit(
@@ -668,7 +753,8 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
             let snapshot = CapabilitySnapshot(
                 attributes: attributes,
                 inspection: inspection,
-                media: mediaCapabilityService.capabilities(attributes: attributes, inspection: inspection)
+                media: mediaCapabilityService.capabilities(attributes: attributes, inspection: inspection),
+                output: mediaCapabilityService.outputCapabilities(attributes: attributes, inspection: inspection)
             )
             cachedCapabilities = snapshot
             return snapshot
@@ -679,7 +765,8 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
         request: IPPRequest,
         inspection: PrinterQueueInspection?,
         attributes: IPPPrinterAttributesSnapshot?,
-        media: PrinterMediaCapabilities
+        media: PrinterMediaCapabilities,
+        output: PrinterOutputCapabilities
     ) -> IPPResponse {
         let printerInfo = attributes?.stringValue(named: "printer-info")
             ?? inspection?.detail.description
@@ -688,7 +775,7 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
             ?? inspection?.detail.description
             ?? advertisementPlan.serviceName
         let documentFormats = preferredDocumentFormats(from: attributes)
-        let supportsColor = attributes?.boolValue(named: "color-supported") ?? false
+        let supportsColor = output.supportsColor
         let activeJobs = attributes?.intValue(named: "queued-job-count") ?? 0
         let state = printerStateValue(from: inspection?.summary.status)
 
@@ -702,7 +789,10 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
                     .init(name: "uri-security-supported", values: [.keyword("none")]),
                     .init(name: "printer-name", values: [.name(advertisementPlan.serviceName)]),
                     .init(name: "printer-info", values: [.text(printerInfo)]),
+                    .init(name: "printer-location", values: [.text("Local network")]),
                     .init(name: "printer-make-and-model", values: [.text(printerModel)]),
+                    .init(name: "printer-more-info", values: [.uri(advertisementPlan.printerURI)]),
+                    .init(name: "printer-up-time", values: [.integer(Int(ProcessInfo.processInfo.systemUptime))]),
                     .init(name: "printer-is-accepting-jobs", values: [.boolean(true)]),
                     .init(name: "printer-is-shared", values: [.boolean(true)]),
                     .init(name: "printer-state", values: [.enumeration(state)]),
@@ -717,13 +807,16 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
                     ]),
                     .init(name: "charset-configured", values: [.charset("utf-8")]),
                     .init(name: "charset-supported", values: [.charset("utf-8")]),
+                    .init(name: "compression-supported", values: [.keyword("none")]),
                     .init(name: "generated-natural-language-supported", values: [.naturalLanguage("en")]),
+                    .init(name: "ipp-versions-supported", values: ["1.1", "2.0"].map(IPPResponseValue.keyword)),
                     .init(name: "natural-language-configured", values: [.naturalLanguage("en")]),
                     .init(name: "pdl-override-supported", values: [.keyword("not-attempted")]),
                     .init(name: "document-format-default", values: [.mimeType(documentFormats.first ?? "application/pdf")]),
                     .init(name: "document-format-supported", values: documentFormats.map(IPPResponseValue.mimeType)),
                     .init(name: "color-supported", values: [.boolean(supportsColor)]),
                 ] + sidesSupportedAttributes(from: attributes)
+                    + outputSupportedAttributes(from: output)
                     + mediaSupportedAttributes(from: media)
             ),
         ]
@@ -881,10 +974,7 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
         }
 
         if let defaultSize {
-            attributes += [
-                .init(name: "media-default", values: [.keyword(defaultSize.ippKeyword)]),
-                .init(name: "media-ready", values: [.keyword(defaultSize.ippKeyword)]),
-            ]
+            attributes.append(.init(name: "media-default", values: [.keyword(defaultSize.ippKeyword)]))
         }
 
         if !typeKeywords.isEmpty {
@@ -898,7 +988,7 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
         }
 
         let supportedMembers = [
-            "media-size", "media-type", "media-bottom-margin", "media-left-margin",
+            "media-size", "media-size-name", "media-type", "media-bottom-margin", "media-left-margin",
             "media-right-margin", "media-top-margin",
         ]
         attributes.append(.init(
@@ -909,14 +999,14 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
             name: "job-creation-attributes-supported",
             values: [
                 "copies", "document-format", "job-name", "media", "media-col",
-                "orientation-requested", "print-color-mode", "print-quality", "sides",
+                "orientation-requested", "print-color-mode", "print-content-optimize",
+                "print-quality", "print-scaling", "printer-resolution", "sides",
             ].map(IPPResponseValue.keyword)
         ))
 
         if let defaultSize {
             let defaultCollection = mediaCollectionMembers(size: defaultSize, typeKeyword: defaultType)
             attributes.append(.init(name: "media-col-default", values: [.collection(defaultCollection)]))
-            attributes.append(.init(name: "media-col-ready", values: [.collection(defaultCollection)]))
         }
 
         if !media.sizes.isEmpty {
@@ -931,6 +1021,45 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
             attributes += marginAttributes(from: media.sizes)
         }
 
+        return attributes
+    }
+
+    private func outputSupportedAttributes(
+        from output: PrinterOutputCapabilities
+    ) -> [IPPResponseAttribute] {
+        var colorModes: [String] = []
+        if output.supportsColor { colorModes += ["auto", "color"] }
+        if output.supportsMonochrome { colorModes.append("monochrome") }
+
+        var attributes: [IPPResponseAttribute] = [
+            .init(name: "copies-default", values: [.integer(1)]),
+            .init(name: "copies-supported", values: [.range(lower: 1, upper: 999)]),
+            .init(name: "orientation-requested-default", values: [.enumeration(3)]),
+            .init(name: "orientation-requested-supported", values: [3, 4, 5, 6].map(IPPResponseValue.enumeration)),
+            .init(name: "print-content-optimize-default", values: [.keyword("auto")]),
+            .init(
+                name: "print-content-optimize-supported",
+                values: ["auto", "photo", "text", "text-and-graphic"].map(IPPResponseValue.keyword)
+            ),
+            .init(name: "print-quality-default", values: [.enumeration(4)]),
+            .init(name: "print-quality-supported", values: [3, 4, 5].map(IPPResponseValue.enumeration)),
+            .init(name: "print-scaling-default", values: [.keyword("auto")]),
+            .init(
+                name: "print-scaling-supported",
+                values: ["auto", "auto-fit", "fill", "fit", "none"].map(IPPResponseValue.keyword)
+            ),
+            .init(name: "printer-resolution-default", values: [.resolution(.init(x: 360, y: 360))]),
+            .init(
+                name: "printer-resolution-supported",
+                values: [180, 360, 720].map { .resolution(.init(x: $0, y: $0)) }
+            ),
+        ]
+        if !colorModes.isEmpty {
+            attributes += [
+                .init(name: "print-color-mode-default", values: [.keyword(output.supportsColor ? "color" : "monochrome")]),
+                .init(name: "print-color-mode-supported", values: colorModes.map(IPPResponseValue.keyword)),
+            ]
+        }
         return attributes
     }
 
@@ -969,6 +1098,7 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
         typeKeyword: String?
     ) -> [IPPResponseCollectionMember] {
         var members = mediaSizeMembers(for: size)
+        members.append(.init(name: "media-size-name", values: [.keyword(size.ippKeyword)]))
         members += [
             .init(name: "media-bottom-margin", values: [.integer(size.bottomMargin)]),
             .init(name: "media-left-margin", values: [.integer(size.leftMargin)]),
@@ -1455,6 +1585,27 @@ public struct IPPRequestAttribute: Equatable, Sendable {
         }
         return Int(valueData.readUInt32BE(at: 0) ?? 0)
     }
+
+    public var resolutionValue: IPPResolution? {
+        guard valueTag == 0x32, valueData.count == 9,
+              let x = valueData.readUInt32BE(at: 0),
+              let y = valueData.readUInt32BE(at: 4) else {
+            return nil
+        }
+        return IPPResolution(x: Int(x), y: Int(y), units: valueData[8])
+    }
+}
+
+public struct IPPResolution: Equatable, Sendable {
+    public let x: Int
+    public let y: Int
+    public let units: UInt8
+
+    public init(x: Int, y: Int, units: UInt8 = 3) {
+        self.x = x
+        self.y = y
+        self.units = units
+    }
 }
 
 public struct IPPRequestAttributeGroup: Equatable, Sendable {
@@ -1491,6 +1642,13 @@ public struct IPPRequest: Equatable, Sendable {
             .first(where: { $0.name == name })?
             .collectionValue
     }
+
+    public func firstResolutionValue(named name: String) -> IPPResolution? {
+        groups
+            .flatMap(\.attributes)
+            .first(where: { $0.name == name })?
+            .resolutionValue
+    }
 }
 
 public enum IPPRequestParserError: LocalizedError, Equatable {
@@ -1521,6 +1679,8 @@ public enum IPPResponseValue: Sendable, Equatable {
     case boolean(Bool)
     case integer(Int)
     case enumeration(Int)
+    case range(lower: Int, upper: Int)
+    case resolution(IPPResolution)
     case collection([IPPResponseCollectionMember])
 
     fileprivate var valueTag: UInt8 {
@@ -1531,6 +1691,10 @@ public enum IPPResponseValue: Sendable, Equatable {
             return 0x22
         case .enumeration:
             return 0x23
+        case .resolution:
+            return 0x32
+        case .range:
+            return 0x33
         case .collection:
             return 0x34
         case .text:
@@ -1566,6 +1730,17 @@ public enum IPPResponseValue: Sendable, Equatable {
              let .enumeration(value):
             var data = Data()
             data.appendUInt32BE(UInt32(max(0, value)))
+            return data
+        case let .resolution(value):
+            var data = Data()
+            data.appendUInt32BE(UInt32(max(0, value.x)))
+            data.appendUInt32BE(UInt32(max(0, value.y)))
+            data.append(value.units)
+            return data
+        case let .range(lower, upper):
+            var data = Data()
+            data.appendUInt32BE(UInt32(max(0, lower)))
+            data.appendUInt32BE(UInt32(max(0, upper)))
             return data
         case .collection:
             return Data()
