@@ -920,18 +920,48 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
         }
 
         if !media.sizes.isEmpty {
-            let databaseTypes: [String?] = typeKeywords.isEmpty ? [nil] : typeKeywords.map(Optional.some)
-            let database = media.sizes.flatMap { size in
-                databaseTypes.map { type in
-                    IPPResponseValue.collection(mediaCollectionMembers(size: size, typeKeyword: type))
-                }
-            }
+            let database = compactMediaDatabase(
+                media: media,
+                typeKeywords: typeKeywords,
+                defaultType: defaultType,
+                defaultSize: defaultSize
+            )
             attributes.append(.init(name: "media-col-database", values: database))
 
             attributes += marginAttributes(from: media.sizes)
         }
 
         return attributes
+    }
+
+    private func compactMediaDatabase(
+        media: PrinterMediaCapabilities,
+        typeKeywords: [String],
+        defaultType: String?,
+        defaultSize: PrinterMediaSize?
+    ) -> [IPPResponseValue] {
+        var combinations: [(PrinterMediaSize, String?)] = media.sizes.map { ($0, defaultType) }
+        let featuredSizeKeywords = [
+            "na_index-4x6_4x6in",
+            "na_5x7_5x7in",
+            "na_index-5x8_5x8in",
+            "na_govt-letter_8x10in",
+            "oe_photo-l_3.5x5in",
+        ]
+        let featuredSizes = [defaultSize].compactMap { $0 } + featuredSizeKeywords.compactMap { keyword in
+            media.sizes.first(where: { $0.ippKeyword == keyword })
+        }
+
+        for size in featuredSizes {
+            combinations += typeKeywords.map { (size, Optional($0)) }
+        }
+
+        var seen: Set<String> = []
+        return combinations.compactMap { size, type in
+            let key = "\(size.ippKeyword)|\(type ?? "")"
+            guard seen.insert(key).inserted else { return nil }
+            return .collection(mediaCollectionMembers(size: size, typeKeyword: type))
+        }
     }
 
     private func mediaCollectionMembers(
