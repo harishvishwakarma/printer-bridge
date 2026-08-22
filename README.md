@@ -67,6 +67,8 @@ Printer Bridge translates standard AirPrint job settings into the options expose
 
 The available choices come from the installed driver, so they vary by printer. Photo apps commonly request a borderless size automatically; document apps normally request the bordered variant.
 
+For borderless photo jobs using automatic or fill scaling, Printer Bridge removes symmetric white padding that an app has baked into its PDF and center-fills the selected sheet. An explicit **Fit** choice is preserved, so users can keep the whole image with borders when preferred.
+
 ## Build from source
 
 Building requires:
