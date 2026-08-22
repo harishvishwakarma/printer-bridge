@@ -33,6 +33,7 @@ Printer Bridge does not normally require macOS Printer Sharing. It runs its own 
 
 - Share existing macOS printer queues through AirPrint
 - Print from iPhone, iPad, and Mac
+- Choose supported paper sizes and media types, including plain and photo paper
 - Enable one or more printers
 - View recent jobs and queue activity
 - Give printers cleaner AirPrint names

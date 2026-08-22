@@ -259,6 +259,58 @@ public struct PrintJobSubmissionResult: Equatable, Sendable {
     }
 }
 
+public struct PrintJobOptions: Equatable, Sendable {
+    public let cupsOptions: [String: String]
+
+    public init(cupsOptions: [String: String] = [:]) {
+        self.cupsOptions = cupsOptions
+    }
+}
+
+enum PrintJobOptionResolver {
+    static func resolve(
+        request: IPPRequest,
+        media: PrinterMediaCapabilities
+    ) -> PrintJobOptions {
+        let mediaCollection = request.firstCollectionValue(named: "media-col")
+        let flatMedia = request.firstStringValue(named: "media")
+
+        var selectedType = mediaCollection?.firstStringValue(named: "media-type")
+            ?? request.firstStringValue(named: "media-type")
+        if selectedType == nil, let flatMedia,
+           media.choices.contains(where: { $0.ippKeyword == flatMedia }) {
+            selectedType = flatMedia
+        }
+
+        var selectedSize = mediaCollection?.firstStringValue(named: "media-size-name")
+        if selectedSize == nil, let flatMedia,
+           media.sizes.contains(where: { $0.ippKeyword == flatMedia }) {
+            selectedSize = flatMedia
+        }
+        if selectedSize == nil,
+           let sizeCollection = mediaCollection?.firstCollectionValue(named: "media-size"),
+           let xDimension = sizeCollection.firstIntegerValue(named: "x-dimension"),
+           let yDimension = sizeCollection.firstIntegerValue(named: "y-dimension") {
+            selectedSize = media.sizes.first(where: {
+                $0.xDimension == xDimension && $0.yDimension == yDimension
+            })?.ippKeyword
+        }
+
+        var cupsOptions: [String: String] = [:]
+        if let selectedType {
+            cupsOptions.merge(media.cupsOptions(forIPPKeyword: selectedType)) { _, new in new }
+        }
+        if let selectedSize {
+            cupsOptions["media"] = selectedSize
+        }
+        if let printQuality = request.firstIntegerValue(named: "print-quality"), (3...5).contains(printQuality) {
+            cupsOptions["print-quality"] = String(printQuality)
+        }
+
+        return PrintJobOptions(cupsOptions: cupsOptions)
+    }
+}
+
 public struct PrintJobSubmissionService {
     private let runner: any CommandRunning
     private let fileManager: FileManager
@@ -275,7 +327,8 @@ public struct PrintJobSubmissionService {
         documentData: Data,
         toQueueNamed queueName: String,
         jobName: String?,
-        documentFormat: String?
+        documentFormat: String?,
+        options: PrintJobOptions = PrintJobOptions()
     ) throws -> PrintJobSubmissionResult {
         guard !documentData.isEmpty else {
             throw PrintJobSubmissionError.emptyDocument
@@ -297,6 +350,9 @@ public struct PrintJobSubmissionService {
         var arguments = ["-d", queueName]
         if let jobName, !jobName.isEmpty {
             arguments += ["-t", jobName]
+        }
+        for (key, value) in options.cupsOptions.sorted(by: { $0.key < $1.key }) {
+            arguments += ["-o", "\(key)=\(value)"]
         }
         arguments.append(temporaryFileURL.path)
 
@@ -402,11 +458,13 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
     private struct CapabilitySnapshot {
         let attributes: IPPPrinterAttributesSnapshot?
         let inspection: PrinterQueueInspection?
+        let media: PrinterMediaCapabilities
     }
 
     private let advertisementPlan: AirPrintAdvertisementPlan
     private let inventoryService: PrinterInventoryService
     private let attributeService: IPPPrinterAttributeService
+    private let mediaCapabilityService: PrinterMediaCapabilityService
     private let jobQueueService: PrintJobQueueService
     private let submissionService: PrintJobSubmissionService
     private let outputHandler: (@Sendable (String) -> Void)?
@@ -417,6 +475,7 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
         advertisementPlan: AirPrintAdvertisementPlan,
         inventoryService: PrinterInventoryService,
         attributeService: IPPPrinterAttributeService,
+        mediaCapabilityService: PrinterMediaCapabilityService = PrinterMediaCapabilityService(),
         jobQueueService: PrintJobQueueService,
         submissionService: PrintJobSubmissionService,
         outputHandler: (@Sendable (String) -> Void)?
@@ -424,13 +483,19 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
         self.advertisementPlan = advertisementPlan
         self.inventoryService = inventoryService
         self.attributeService = attributeService
+        self.mediaCapabilityService = mediaCapabilityService
         self.jobQueueService = jobQueueService
         self.submissionService = submissionService
         self.outputHandler = outputHandler
         if advertisementPlan.prefetchedAttributes != nil || advertisementPlan.prefetchedInspection != nil {
-            cachedCapabilities = CapabilitySnapshot(
+            let media = mediaCapabilityService.capabilities(
                 attributes: advertisementPlan.prefetchedAttributes,
                 inspection: advertisementPlan.prefetchedInspection
+            )
+            cachedCapabilities = CapabilitySnapshot(
+                attributes: advertisementPlan.prefetchedAttributes,
+                inspection: advertisementPlan.prefetchedInspection,
+                media: media
             )
         }
     }
@@ -538,7 +603,8 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
             return buildPrinterAttributesResponse(
                 request: ippRequest,
                 inspection: capabilities.inspection,
-                attributes: capabilities.attributes
+                attributes: capabilities.attributes,
+                media: capabilities.media
             )
         case .validateJob:
             outputHandler?("[proxy] Validate-Job for \(queueName)")
@@ -549,6 +615,10 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
         case .printJob:
             let jobName = ippRequest.firstStringValue(named: "job-name")
             let documentFormat = ippRequest.firstStringValue(named: "document-format")
+            let jobOptions = PrintJobOptionResolver.resolve(
+                request: ippRequest,
+                media: capabilities(forQueueNamed: queueName).media
+            )
             outputHandler?("[proxy] Print-Job \(jobName ?? "(untitled)") format=\(documentFormat ?? "unknown") size=\(ippRequest.documentData.count)")
 
             do {
@@ -556,7 +626,8 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
                     documentData: ippRequest.documentData,
                     toQueueNamed: queueName,
                     jobName: jobName,
-                    documentFormat: documentFormat
+                    documentFormat: documentFormat,
+                    options: jobOptions
                 )
                 return buildPrintJobResponse(
                     request: ippRequest,
@@ -592,9 +663,12 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
                 return cachedCapabilities
             }
 
+            let attributes = attributeService.fetchAttributes(forQueueNamed: queueName)
+            let inspection = inventoryService.inspectQueue(named: queueName)
             let snapshot = CapabilitySnapshot(
-                attributes: attributeService.fetchAttributes(forQueueNamed: queueName),
-                inspection: inventoryService.inspectQueue(named: queueName)
+                attributes: attributes,
+                inspection: inspection,
+                media: mediaCapabilityService.capabilities(attributes: attributes, inspection: inspection)
             )
             cachedCapabilities = snapshot
             return snapshot
@@ -604,7 +678,8 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
     private func buildPrinterAttributesResponse(
         request: IPPRequest,
         inspection: PrinterQueueInspection?,
-        attributes: IPPPrinterAttributesSnapshot?
+        attributes: IPPPrinterAttributesSnapshot?,
+        media: PrinterMediaCapabilities
     ) -> IPPResponse {
         let printerInfo = attributes?.stringValue(named: "printer-info")
             ?? inspection?.detail.description
@@ -649,6 +724,7 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
                     .init(name: "document-format-supported", values: documentFormats.map(IPPResponseValue.mimeType)),
                     .init(name: "color-supported", values: [.boolean(supportsColor)]),
                 ] + sidesSupportedAttributes(from: attributes)
+                    + mediaSupportedAttributes(from: media)
             ),
         ]
 
@@ -785,6 +861,122 @@ private final class ProxyAirPrintRequestHandler: @unchecked Sendable {
                 .init(name: "job-state-reasons", values: [.keyword(jobStateReason)]),
             ]
         )
+    }
+
+    private func mediaSupportedAttributes(
+        from media: PrinterMediaCapabilities
+    ) -> [IPPResponseAttribute] {
+        let typeKeywords = media.choices.map(\.ippKeyword)
+        let defaultType = media.defaultTypeKeyword ?? typeKeywords.first
+        let defaultSize = media.defaultSize ?? media.sizes.first
+        var attributes: [IPPResponseAttribute] = []
+
+        if !media.sizes.isEmpty {
+            attributes += [
+                .init(name: "media-supported", values: media.sizes.map { .keyword($0.ippKeyword) }),
+                .init(name: "media-size-supported", values: media.sizes.map {
+                    .collection(dimensionMembers(for: $0))
+                }),
+            ]
+        }
+
+        if let defaultSize {
+            attributes += [
+                .init(name: "media-default", values: [.keyword(defaultSize.ippKeyword)]),
+                .init(name: "media-ready", values: [.keyword(defaultSize.ippKeyword)]),
+            ]
+        }
+
+        if !typeKeywords.isEmpty {
+            attributes.append(.init(
+                name: "media-type-supported",
+                values: typeKeywords.map(IPPResponseValue.keyword)
+            ))
+        }
+        if let defaultType {
+            attributes.append(.init(name: "media-type-default", values: [.keyword(defaultType)]))
+        }
+
+        let supportedMembers = [
+            "media-size", "media-type", "media-bottom-margin", "media-left-margin",
+            "media-right-margin", "media-top-margin",
+        ]
+        attributes.append(.init(
+            name: "media-col-supported",
+            values: supportedMembers.map(IPPResponseValue.keyword)
+        ))
+        attributes.append(.init(
+            name: "job-creation-attributes-supported",
+            values: [
+                "copies", "document-format", "job-name", "media", "media-col",
+                "orientation-requested", "print-color-mode", "print-quality", "sides",
+            ].map(IPPResponseValue.keyword)
+        ))
+
+        if let defaultSize {
+            let defaultCollection = mediaCollectionMembers(size: defaultSize, typeKeyword: defaultType)
+            attributes.append(.init(name: "media-col-default", values: [.collection(defaultCollection)]))
+            attributes.append(.init(name: "media-col-ready", values: [.collection(defaultCollection)]))
+        }
+
+        if !media.sizes.isEmpty {
+            let databaseTypes: [String?] = typeKeywords.isEmpty ? [nil] : typeKeywords.map(Optional.some)
+            let database = media.sizes.flatMap { size in
+                databaseTypes.map { type in
+                    IPPResponseValue.collection(mediaCollectionMembers(size: size, typeKeyword: type))
+                }
+            }
+            attributes.append(.init(name: "media-col-database", values: database))
+
+            attributes += marginAttributes(from: media.sizes)
+        }
+
+        return attributes
+    }
+
+    private func mediaCollectionMembers(
+        size: PrinterMediaSize,
+        typeKeyword: String?
+    ) -> [IPPResponseCollectionMember] {
+        var members = mediaSizeMembers(for: size)
+        members += [
+            .init(name: "media-bottom-margin", values: [.integer(size.bottomMargin)]),
+            .init(name: "media-left-margin", values: [.integer(size.leftMargin)]),
+            .init(name: "media-right-margin", values: [.integer(size.rightMargin)]),
+            .init(name: "media-top-margin", values: [.integer(size.topMargin)]),
+        ]
+        if let typeKeyword {
+            members.append(.init(name: "media-type", values: [.keyword(typeKeyword)]))
+        }
+        return members
+    }
+
+    private func mediaSizeMembers(for size: PrinterMediaSize) -> [IPPResponseCollectionMember] {
+        [
+            .init(
+                name: "media-size",
+                values: [.collection(dimensionMembers(for: size))]
+            ),
+        ]
+    }
+
+    private func dimensionMembers(for size: PrinterMediaSize) -> [IPPResponseCollectionMember] {
+        [
+            .init(name: "x-dimension", values: [.integer(size.xDimension)]),
+            .init(name: "y-dimension", values: [.integer(size.yDimension)]),
+        ]
+    }
+
+    private func marginAttributes(from sizes: [PrinterMediaSize]) -> [IPPResponseAttribute] {
+        let margins: [(String, [Int])] = [
+            ("media-bottom-margin-supported", sizes.map(\.bottomMargin)),
+            ("media-left-margin-supported", sizes.map(\.leftMargin)),
+            ("media-right-margin-supported", sizes.map(\.rightMargin)),
+            ("media-top-margin-supported", sizes.map(\.topMargin)),
+        ]
+        return margins.map { name, values in
+            .init(name: name, values: Array(Set(values)).sorted().map(IPPResponseValue.integer))
+        }
     }
 
     private func preferredDocumentFormats(from attributes: IPPPrinterAttributesSnapshot?) -> [String] {
@@ -1159,10 +1351,69 @@ public enum IPPAttributeGroupTag: UInt8, Sendable {
     case unsupportedAttributes = 0x05
 }
 
+public enum IPPRequestCollectionValue: Equatable, Sendable {
+    case string(String, valueTag: UInt8)
+    case integer(Int, valueTag: UInt8)
+    case collection(IPPRequestCollection)
+
+    public var stringValue: String? {
+        guard case let .string(value, _) = self else { return nil }
+        return value
+    }
+
+    public var integerValue: Int? {
+        guard case let .integer(value, _) = self else { return nil }
+        return value
+    }
+
+    public var collectionValue: IPPRequestCollection? {
+        guard case let .collection(value) = self else { return nil }
+        return value
+    }
+}
+
+public struct IPPRequestCollectionMember: Equatable, Sendable {
+    public let name: String
+    public let values: [IPPRequestCollectionValue]
+
+    public init(name: String, values: [IPPRequestCollectionValue]) {
+        self.name = name
+        self.values = values
+    }
+}
+
+public struct IPPRequestCollection: Equatable, Sendable {
+    public let members: [IPPRequestCollectionMember]
+
+    public init(members: [IPPRequestCollectionMember]) {
+        self.members = members
+    }
+
+    public func firstStringValue(named name: String) -> String? {
+        members.first(where: { $0.name == name })?.values.compactMap(\.stringValue).first
+    }
+
+    public func firstIntegerValue(named name: String) -> Int? {
+        members.first(where: { $0.name == name })?.values.compactMap(\.integerValue).first
+    }
+
+    public func firstCollectionValue(named name: String) -> IPPRequestCollection? {
+        members.first(where: { $0.name == name })?.values.compactMap(\.collectionValue).first
+    }
+}
+
 public struct IPPRequestAttribute: Equatable, Sendable {
     public let name: String
     public let valueTag: UInt8
     public let valueData: Data
+    public let collectionValue: IPPRequestCollection?
+
+    public init(name: String, valueTag: UInt8, valueData: Data, collectionValue: IPPRequestCollection? = nil) {
+        self.name = name
+        self.valueTag = valueTag
+        self.valueData = valueData
+        self.collectionValue = collectionValue
+    }
 
     public var stringValue: String? {
         String(data: valueData, encoding: .utf8)
@@ -1203,6 +1454,13 @@ public struct IPPRequest: Equatable, Sendable {
             .first(where: { $0.name == name })?
             .integerValue
     }
+
+    public func firstCollectionValue(named name: String) -> IPPRequestCollection? {
+        groups
+            .flatMap(\.attributes)
+            .first(where: { $0.name == name })?
+            .collectionValue
+    }
 }
 
 public enum IPPRequestParserError: LocalizedError, Equatable {
@@ -1233,6 +1491,7 @@ public enum IPPResponseValue: Sendable, Equatable {
     case boolean(Bool)
     case integer(Int)
     case enumeration(Int)
+    case collection([IPPResponseCollectionMember])
 
     fileprivate var valueTag: UInt8 {
         switch self {
@@ -1242,6 +1501,8 @@ public enum IPPResponseValue: Sendable, Equatable {
             return 0x22
         case .enumeration:
             return 0x23
+        case .collection:
+            return 0x34
         case .text:
             return 0x41
         case .name:
@@ -1276,7 +1537,19 @@ public enum IPPResponseValue: Sendable, Equatable {
             var data = Data()
             data.appendUInt32BE(UInt32(max(0, value)))
             return data
+        case .collection:
+            return Data()
         }
+    }
+}
+
+public struct IPPResponseCollectionMember: Sendable, Equatable {
+    public let name: String
+    public let values: [IPPResponseValue]
+
+    public init(name: String, values: [IPPResponseValue]) {
+        self.name = name
+        self.values = values
     }
 }
 
@@ -1330,15 +1603,7 @@ public struct IPPResponse: Sendable, Equatable {
             data.append(group.tag.rawValue)
             for attribute in group.attributes where !attribute.values.isEmpty {
                 for (index, value) in attribute.values.enumerated() {
-                    data.append(value.valueTag)
-                    if index == 0 {
-                        data.appendStringWithUInt16Length(attribute.name)
-                    } else {
-                        data.appendUInt16BE(0)
-                    }
-                    let encodedValue = value.encodedData
-                    data.appendUInt16BE(UInt16(encodedValue.count))
-                    data.append(encodedValue)
+                    data.appendIPPValue(value, attributeName: index == 0 ? attribute.name : nil)
                 }
             }
         }
@@ -1439,7 +1704,98 @@ public enum IPPRequestParser {
             let valueData = data.subdata(in: cursor..<endIndex)
             cursor = endIndex
 
-            currentAttributes.append(.init(name: name, valueTag: tag, valueData: valueData))
+            if tag == 0x34 {
+                guard valueData.isEmpty else {
+                    throw IPPRequestParserError.malformedAttribute
+                }
+                let collection = try parseCollection(data, cursor: &cursor)
+                currentAttributes.append(.init(
+                    name: name,
+                    valueTag: tag,
+                    valueData: Data(),
+                    collectionValue: collection
+                ))
+            } else {
+                currentAttributes.append(.init(name: name, valueTag: tag, valueData: valueData))
+            }
+        }
+
+        throw IPPRequestParserError.malformedAttribute
+    }
+
+    private static func parseCollection(_ data: Data, cursor: inout Int) throws -> IPPRequestCollection {
+        var memberOrder: [String] = []
+        var memberValues: [String: [IPPRequestCollectionValue]] = [:]
+        var currentMemberName: String?
+
+        while cursor < data.count {
+            let tag = data[cursor]
+            cursor += 1
+
+            guard let nameLength = data.readUInt16BE(at: cursor) else {
+                throw IPPRequestParserError.malformedAttribute
+            }
+            cursor += 2
+            let nameEnd = cursor + Int(nameLength)
+            guard nameEnd <= data.count else {
+                throw IPPRequestParserError.malformedAttribute
+            }
+            cursor = nameEnd
+
+            guard let valueLength = data.readUInt16BE(at: cursor) else {
+                throw IPPRequestParserError.malformedAttribute
+            }
+            cursor += 2
+            let valueEnd = cursor + Int(valueLength)
+            guard valueEnd <= data.count else {
+                throw IPPRequestParserError.malformedAttribute
+            }
+            let valueData = data.subdata(in: cursor..<valueEnd)
+            cursor = valueEnd
+
+            if tag == 0x37 {
+                guard nameLength == 0, valueLength == 0 else {
+                    throw IPPRequestParserError.malformedAttribute
+                }
+                return IPPRequestCollection(members: memberOrder.map {
+                    IPPRequestCollectionMember(name: $0, values: memberValues[$0] ?? [])
+                })
+            }
+
+            if tag == 0x4A {
+                guard let memberName = String(data: valueData, encoding: .utf8), !memberName.isEmpty else {
+                    throw IPPRequestParserError.malformedAttribute
+                }
+                currentMemberName = memberName
+                if memberValues[memberName] == nil {
+                    memberOrder.append(memberName)
+                    memberValues[memberName] = []
+                }
+                continue
+            }
+
+            guard let currentMemberName else {
+                throw IPPRequestParserError.malformedAttribute
+            }
+
+            let value: IPPRequestCollectionValue
+            if tag == 0x34 {
+                guard valueData.isEmpty else {
+                    throw IPPRequestParserError.malformedAttribute
+                }
+                value = .collection(try parseCollection(data, cursor: &cursor))
+            } else if tag == 0x21 || tag == 0x23 {
+                guard valueData.count == 4, let rawValue = valueData.readUInt32BE(at: 0) else {
+                    throw IPPRequestParserError.malformedAttribute
+                }
+                value = .integer(Int(rawValue), valueTag: tag)
+            } else {
+                guard let string = String(data: valueData, encoding: .utf8) else {
+                    throw IPPRequestParserError.malformedAttribute
+                }
+                value = .string(string, valueTag: tag)
+            }
+            memberValues[currentMemberName, default: []].append(value)
         }
 
         throw IPPRequestParserError.malformedAttribute
@@ -1447,6 +1803,35 @@ public enum IPPRequestParser {
 }
 
 private extension Data {
+    mutating func appendIPPValue(_ value: IPPResponseValue, attributeName: String?) {
+        append(value.valueTag)
+        if let attributeName {
+            appendStringWithUInt16Length(attributeName)
+        } else {
+            appendUInt16BE(0)
+        }
+
+        switch value {
+        case let .collection(members):
+            appendUInt16BE(0)
+            for member in members where !member.values.isEmpty {
+                for memberValue in member.values {
+                    append(0x4A)
+                    appendUInt16BE(0)
+                    appendStringWithUInt16Length(member.name)
+                    appendIPPValue(memberValue, attributeName: nil)
+                }
+            }
+            append(0x37)
+            appendUInt16BE(0)
+            appendUInt16BE(0)
+        default:
+            let encodedValue = value.encodedData
+            appendUInt16BE(UInt16(encodedValue.count))
+            append(encodedValue)
+        }
+    }
+
     mutating func appendUInt16BE(_ value: UInt16) {
         append(UInt8((value >> 8) & 0xff))
         append(UInt8(value & 0xff))
