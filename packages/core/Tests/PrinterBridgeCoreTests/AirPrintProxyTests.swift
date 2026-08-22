@@ -86,7 +86,7 @@ func ippRequestParserDecodesMediaCollection() throws {
                     yDimension: 15240,
                     cupsOptions: [
                         "PageSize": "EPKG.NMgn", "EPIJ_Size": "EPKG",
-                        "EPIJ_Bdls": "1", "EPIJ_exmg": "2",
+                        "EPIJ_Bdls": "1", "EPIJ_exmg": "2", "EPIJ_PSrc": "3",
                     ],
                     isBorderless: true
                 ),
@@ -107,6 +107,7 @@ func ippRequestParserDecodesMediaCollection() throws {
         "EPIJ_Ink_": "0",
         "EPIJ_Medi": "145",
         "EPIJ_Mode": "3",
+        "EPIJ_PSrc": "3",
         "EPIJ_Qual": "306",
         "EPIJ_Size": "EPKG",
         "EPIJ_exmg": "2",

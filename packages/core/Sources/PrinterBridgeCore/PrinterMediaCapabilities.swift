@@ -375,6 +375,7 @@ public struct PrinterMediaCapabilityService {
     ) -> [PrinterMediaSize] {
         let pageSizes = ppdPageSizes(ppdContents)
         let epsonSizeLabels = choiceLabels(forOptionKey: "EPIJ_Size", in: ppdContents)
+        let epsonPageSourceLabels = choiceLabels(forOptionKey: "EPIJ_PSrc", in: ppdContents)
 
         return sizes.map { size in
             let zeroMargins = size.bottomMargin == 0 && size.leftMargin == 0
@@ -397,6 +398,12 @@ public struct PrinterMediaCapabilityService {
             ]
             if pageSize.isBorderless {
                 options["EPIJ_exmg"] = "2"
+            }
+            let pageSourceLabel = pageSize.isBorderless ? "borderless" : "standard"
+            if let pageSourceValue = epsonPageSourceLabels.first(where: {
+                $0.value.localizedCaseInsensitiveContains(pageSourceLabel)
+            })?.key {
+                options["EPIJ_PSrc"] = pageSourceValue
             }
             if let epsonSizeValue {
                 options["EPIJ_Size"] = epsonSizeValue

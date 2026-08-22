@@ -31,6 +31,8 @@ func mediaCapabilitiesTranslateDriverChoicesToStandardIPPKeywords() throws {
     *PageSize A4.NMgn/A4 (Borderless): "<</PageSize[595.20 841.80]/ImagingBBox null>>setpagedevice"
     *PageSize EPKG/10 x 15 cm (4 x 6 in): "<</PageSize[288.00 432.00]/ImagingBBox null>>setpagedevice"
     *PageSize EPKG.NMgn/10 x 15 cm (4 x 6 in) (Borderless): "<</PageSize[288.00 432.00]/ImagingBBox null>>setpagedevice"
+    *EPIJ_PSrc 2/Standard: ""
+    *EPIJ_PSrc 3/Borderless: ""
     *EPIJ_Size A4/A4: ""
     *EPIJ_Size EPKG/10 x 15 cm (4 x 6 in): ""
     *APPrinterPreset PlainGeneral/General on Plain paper: "
@@ -146,7 +148,9 @@ func mediaCapabilitiesTranslateDriverChoicesToStandardIPPKeywords() throws {
     #expect(glossy?.photoPresetOptions["EPIJ_Qual"] == "306")
     #expect(glossy?.photoPresetOptions["Resolution"] == "720x720dpi")
     #expect(capabilities.sizes.first { $0.ippKeyword == "iso_a4_210x297mm" }?.cupsOptions["PageSize"] == "A4")
+    #expect(capabilities.sizes.first { $0.ippKeyword == "iso_a4_210x297mm" }?.cupsOptions["EPIJ_PSrc"] == "2")
     #expect(capabilities.sizes.first { $0.ippKeyword == "na_index-4x6_4x6in" }?.cupsOptions["PageSize"] == "EPKG.NMgn")
+    #expect(capabilities.sizes.first { $0.ippKeyword == "na_index-4x6_4x6in" }?.cupsOptions["EPIJ_PSrc"] == "3")
     #expect(capabilities.sizes.first { $0.ippKeyword == "na_index-4x6_4x6in" }?.isBorderless == true)
 
     let output = PrinterMediaCapabilityService().outputCapabilities(
