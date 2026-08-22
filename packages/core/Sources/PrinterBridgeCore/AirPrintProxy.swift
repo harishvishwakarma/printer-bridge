@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import Network
 
 public enum BridgeRuntimeError: LocalizedError {
@@ -366,8 +367,10 @@ enum PrintJobOptionResolver {
            ["auto", "auto-fit", "fill", "fit", "none"].contains(scaling) {
             cupsOptions["print-scaling"] = scaling
         }
-        if let orientation = request.firstIntegerValue(named: "orientation-requested"),
-           (3...6).contains(orientation) {
+        let explicitOrientation = request.firstIntegerValue(named: "orientation-requested")
+        let orientation = explicitOrientation.flatMap { (3...6).contains($0) ? $0 : nil }
+            ?? inferredPDFOrientation(documentData: request.documentData)
+        if let orientation {
             cupsOptions["orientation-requested"] = String(orientation)
         }
 
@@ -378,6 +381,26 @@ enum PrintJobOptionResolver {
     private static func isCommonPhotoSize(_ size: PrinterMediaSize) -> Bool {
         let photoKeywords = ["3.5x5", "4x6", "5x7", "5x8", "8x10", "photo"]
         return photoKeywords.contains(where: size.ippKeyword.localizedCaseInsensitiveContains)
+    }
+
+    private static func inferredPDFOrientation(documentData: Data) -> Int? {
+        guard
+            !documentData.isEmpty,
+            documentData.starts(with: Data("%PDF".utf8)),
+            let provider = CGDataProvider(data: documentData as CFData),
+            let document = CGPDFDocument(provider),
+            let page = document.page(at: 1)
+        else {
+            return nil
+        }
+
+        let mediaBox = page.getBoxRect(.mediaBox)
+        guard mediaBox.width > 0, mediaBox.height > 0 else { return nil }
+        let quarterTurns = abs(page.rotationAngle / 90) % 2
+        let width = quarterTurns == 1 ? mediaBox.height : mediaBox.width
+        let height = quarterTurns == 1 ? mediaBox.width : mediaBox.height
+        guard abs(width - height) > 0.5 else { return nil }
+        return width > height ? 4 : 3
     }
 }
 

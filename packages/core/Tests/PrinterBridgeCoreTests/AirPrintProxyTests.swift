@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import Testing
 @testable import PrinterBridgeCore
 
@@ -178,6 +179,45 @@ func resolverMapsPlainA4MonochromeNormalToEpsonDriverOptions() throws {
 }
 
 @Test
+func resolverInfersLandscapeOrientationFromPDFPageGeometry() throws {
+    var message = Data([0x02, 0x00])
+    message.append(contentsOf: [0x00, 0x02])
+    message.append(contentsOf: [0x00, 0x00, 0x00, 0x2D])
+    message.append(0x02)
+    appendAttribute(tag: 0x44, name: "media", value: "na_index-4x6_4x6in", to: &message)
+    appendAttribute(tag: 0x49, name: "document-format", value: "application/pdf", to: &message)
+    message.append(0x03)
+    message.append(landscapePDFData())
+
+    let request = try IPPRequestParser.parse(message)
+    let options = PrintJobOptionResolver.resolve(
+        request: request,
+        media: PrinterMediaCapabilities(
+            choices: [],
+            defaultTypeKeyword: nil,
+            sizes: [
+                .init(
+                    ippKeyword: "na_index-4x6_4x6in",
+                    xDimension: 10160,
+                    yDimension: 15240,
+                    cupsOptions: ["PageSize": "EPKG.NMgn"],
+                    isBorderless: true
+                ),
+            ],
+            defaultSize: nil
+        ),
+        output: PrinterOutputCapabilities(
+            supportsColor: true,
+            supportsMonochrome: true,
+            generalQualityOptions: [:],
+            photoNormalOptions: [:]
+        )
+    )
+
+    #expect(options.cupsOptions["orientation-requested"] == "4")
+}
+
+@Test
 func ippResponseEncodesNestedMediaCollections() throws {
     let response = IPPResponse(
         versionMajor: 2,
@@ -297,6 +337,17 @@ private func appendIntegerAttribute(name: String, value: UInt32, to data: inout 
         UInt8((value >> 24) & 0xff), UInt8((value >> 16) & 0xff),
         UInt8((value >> 8) & 0xff), UInt8(value & 0xff),
     ]), to: &data)
+}
+
+private func landscapePDFData() -> Data {
+    let data = NSMutableData()
+    var mediaBox = CGRect(x: 0, y: 0, width: 432, height: 288)
+    let consumer = CGDataConsumer(data: data as CFMutableData)!
+    let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil)!
+    context.beginPDFPage(nil)
+    context.endPDFPage()
+    context.closePDF()
+    return data as Data
 }
 
 private func appendCollectionStart(name: String?, to data: inout Data) {
