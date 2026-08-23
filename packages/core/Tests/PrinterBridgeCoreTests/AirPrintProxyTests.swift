@@ -241,6 +241,70 @@ func resolverMapsPlainA4MonochromeNormalToEpsonDriverOptions() throws {
 }
 
 @Test
+func resolverMapsA4CardStockToEpsonMatteWithThickPaperEnabled() throws {
+    var message = Data([0x02, 0x00])
+    message.append(contentsOf: [0x00, 0x02])
+    message.append(contentsOf: [0x00, 0x00, 0x00, 0x2D])
+    message.append(0x02)
+    appendAttribute(tag: 0x44, name: "media", value: "iso_a4_210x297mm", to: &message)
+    appendAttribute(tag: 0x44, name: "media-type", value: "card-stock", to: &message)
+    appendAttribute(tag: 0x44, name: "print-color-mode", value: "color", to: &message)
+    appendIntegerAttribute(name: "print-quality", value: 5, to: &message)
+    message.append(0x03)
+    message.append(Data("A4-CARD-STOCK".utf8))
+
+    let request = try IPPRequestParser.parse(message)
+    let options = PrintJobOptionResolver.resolve(
+        request: request,
+        media: PrinterMediaCapabilities(
+            choices: [
+                .init(
+                    ippKeyword: "card-stock",
+                    displayName: "Card Stock",
+                    cupsOptions: ["EPIJ_Medi": "12", "MediaType": "12", "EPIJ_PGEx": "1"]
+                ),
+            ],
+            defaultTypeKeyword: "stationery",
+            sizes: [
+                .init(
+                    ippKeyword: "iso_a4_210x297mm",
+                    xDimension: 21000,
+                    yDimension: 29700,
+                    cupsOptions: ["PageSize": "A4", "EPIJ_Size": "A4", "EPIJ_Bdls": "0"]
+                ),
+            ],
+            defaultSize: nil
+        ),
+        output: PrinterOutputCapabilities(
+            supportsColor: true,
+            supportsMonochrome: true,
+            generalQualityOptions: [
+                5: ["EPIJ_Mode": "3", "EPIJ_Qual": "304", "Resolution": "720x720dpi"],
+            ],
+            photoNormalOptions: [:],
+            colorModeOptions: [
+                "color": ["ColorModel": "RGB", "EPIJ_Ink_": "1"],
+            ]
+        )
+    )
+
+    #expect(options.cupsOptions == [
+        "ColorModel": "RGB",
+        "EPIJ_Bdls": "0",
+        "EPIJ_Ink_": "1",
+        "EPIJ_Medi": "12",
+        "EPIJ_Mode": "3",
+        "EPIJ_PGEx": "1",
+        "EPIJ_Qual": "304",
+        "EPIJ_Size": "A4",
+        "MediaType": "12",
+        "PageSize": "A4",
+        "Resolution": "720x720dpi",
+    ])
+    #expect(!options.fillsBorderlessPhotoMedia)
+}
+
+@Test
 func resolverMapsA4ColorAndQualityMatrix() throws {
     let media = PrinterMediaCapabilities(
         choices: [

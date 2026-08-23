@@ -184,6 +184,21 @@ public struct PrinterMediaCapabilityService {
             )
         }
 
+        if let ppdContents,
+           let inspection,
+           let matteCandidates = candidates["photographic-matte"],
+           let thickPaperOption = inspection.options.first(where: Self.isThickPaperOption),
+           let enabledValue = Self.enabledValue(for: thickPaperOption, in: ppdContents) {
+            var cardStockCandidates = matteCandidates
+            cardStockCandidates.removeValue(forKey: "media-type")
+            cardStockCandidates[thickPaperOption.key] = Candidate(
+                driverValue: enabledValue,
+                displayName: "Card Stock",
+                preference: 100
+            )
+            candidates["card-stock"] = cardStockCandidates
+        }
+
         let choices = candidates.keys.sorted().compactMap { keyword -> PrinterMediaChoice? in
             guard let optionCandidates = candidates[keyword], !optionCandidates.isEmpty else { return nil }
             let preferred = optionCandidates.values.max { lhs, rhs in lhs.preference < rhs.preference }
@@ -528,6 +543,21 @@ public struct PrinterMediaCapabilityService {
             || key.hasSuffix("_medi")
             || displayName.contains("media type")
             || displayName.contains("paper type")
+    }
+
+    private static func isThickPaperOption(_ option: PrinterOption) -> Bool {
+        option.key == "EPIJ_PGEx"
+            || option.displayName.localizedCaseInsensitiveContains("thick paper")
+    }
+
+    private static func enabledValue(for option: PrinterOption, in ppdContents: String) -> String? {
+        let labels = choiceLabels(forOptionKey: option.key, in: ppdContents)
+        return option.values.first(where: { choice in
+            let label = labels[choice.value]?.lowercased() ?? ""
+            return label == "on"
+                || label == "enabled"
+                || ["1", "on", "true", "yes"].contains(choice.value.lowercased())
+        })?.value
     }
 
     private static func preferenceScore(for displayName: String, keyword: String) -> Int {

@@ -53,6 +53,7 @@ Printer Bridge discovers printer queues that already work on macOS, publishes th
 | A4, Letter, envelopes, and driver-supported sizes | 4 × 6, 5 × 7, 5 × 8, 8 × 10, and driver-supported photo sizes |
 | Colour or monochrome output | Glossy, matte, semi-gloss, and other photo media |
 | Draft, normal, and best quality | High-quality driver modes and advertised resolutions |
+| A4 card stock using the driver's matte and thick-paper settings | Load unusually heavy stock one sheet at a time |
 | Portrait and landscape orientation | Bordered or borderless output when the driver supports it |
 | Copies and page ranges | Fit or centre-fill scaling with orientation-aware cropping |
 

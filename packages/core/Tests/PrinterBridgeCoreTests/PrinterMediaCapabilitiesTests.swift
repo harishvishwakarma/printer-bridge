@@ -25,6 +25,8 @@ func mediaCapabilitiesTranslateDriverChoicesToStandardIPPKeywords() throws {
     *EPIJ_Qual 304/Fine: ""
     *EPIJ_Qual 305/Quality: ""
     *EPIJ_Qual 306/High Quality: ""
+    *EPIJ_PGEx 0/Off: ""
+    *EPIJ_PGEx 1/On: ""
     *Resolution 180x180dpi/180 dpi: ""
     *Resolution 360x360dpi/360 dpi: ""
     *Resolution 720x720dpi/720 dpi: ""
@@ -103,6 +105,10 @@ func mediaCapabilitiesTranslateDriverChoicesToStandardIPPKeywords() throws {
                 .init(value: "360x360dpi", isDefault: true),
                 .init(value: "720x720dpi", isDefault: false),
             ]),
+            .init(key: "EPIJ_PGEx", displayName: "Thick paper and envelopes", values: [
+                .init(value: "0", isDefault: true),
+                .init(value: "1", isDefault: false),
+            ]),
             .init(key: "ColorModel", displayName: "Color Model", values: [
                 .init(value: "RGB", isDefault: true),
                 .init(value: "Mono", isDefault: false),
@@ -149,6 +155,9 @@ func mediaCapabilitiesTranslateDriverChoicesToStandardIPPKeywords() throws {
     ])
     #expect(capabilities.cupsOptions(forIPPKeyword: "photographic-glossy") == [
         "EPIJ_Medi": "145", "MediaType": "145",
+    ])
+    #expect(capabilities.cupsOptions(forIPPKeyword: "card-stock") == [
+        "EPIJ_Medi": "12", "MediaType": "12", "EPIJ_PGEx": "1",
     ])
     let glossy = capabilities.choices.first { $0.ippKeyword == "photographic-glossy" }
     #expect(glossy?.photoPresetOptions["EPIJ_Qual"] == "306")
