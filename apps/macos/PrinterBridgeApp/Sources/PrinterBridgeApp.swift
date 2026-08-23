@@ -22,7 +22,7 @@ struct PrinterBridgeApp: App {
                 ),
                 appearanceRefreshToken: appearanceRefreshToken
             )
-                .frame(width: 560, height: 470)
+                .frame(minWidth: 720, minHeight: 520)
                 .preferredColorScheme(appearanceMode.colorScheme)
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                     model.loadBridgeState()
@@ -43,23 +43,26 @@ struct PrinterBridgeApp: App {
                     refreshAppearance(rebuildTabView: false)
                 }
         }
-        .windowResizability(.contentSize)
+        .defaultSize(width: 820, height: 600)
+        .windowResizability(.contentMinSize)
         .commands {
             PrinterBridgeCommands()
         }
 
         Window("\(ProjectMetadata.appDisplayName) Help", id: "help") {
             HelpView()
-                .frame(width: 500, height: 560)
+                .frame(minWidth: 540, minHeight: 500)
                 .preferredColorScheme(appearanceMode.colorScheme)
         }
-        .windowResizability(.contentSize)
+        .defaultSize(width: 620, height: 640)
+        .windowResizability(.contentMinSize)
 
         Window("About \(ProjectMetadata.appDisplayName)", id: "about") {
             AboutView()
                 .preferredColorScheme(appearanceMode.colorScheme)
         }
-        .windowResizability(.contentSize)
+        .defaultSize(width: 520, height: 520)
+        .windowResizability(.contentMinSize)
     }
 
     private func refreshAppearance(rebuildTabView: Bool = true) {

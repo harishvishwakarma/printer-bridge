@@ -1,0 +1,10 @@
+[
+  {
+    "date": "2026-08-23",
+    "scope": "app",
+    "macrostructure": "Workbench",
+    "theme": "Cobalt",
+    "enrichment": "none",
+    "brief": "Modernise and audit the native Printer Bridge macOS UI"
+  }
+]

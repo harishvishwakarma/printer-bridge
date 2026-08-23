@@ -1,0 +1,14 @@
+{
+  "date": "2026-08-23",
+  "framework": "SwiftUI for macOS 15+",
+  "font_stack": "Native San Francisco semantic text styles",
+  "palette": "SwiftUI semantic surfaces with an explicit Cobalt interaction accent and semantic status colours",
+  "motion": "motion-cut; native transitions only",
+  "spacing": "informal 10/12/16/20-point values before redesign",
+  "preserve": [
+    "native typography",
+    "appearance modes",
+    "semantic status colours",
+    "bridge logic"
+  ]
+}

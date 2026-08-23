@@ -62,6 +62,8 @@ final class PrinterBridgeViewModel: ObservableObject {
     @Published var jobsMessage: String?
     @Published var publicationState: PublicationState = .inactive
     @Published var lastBonjourEvent: String?
+    @Published private(set) var isRefreshingBridgeState = false
+    @Published private(set) var isUpdatingJobs = false
 
     private let configurationStore: BridgeConfigurationStore
     private let runtimeService: BridgeRuntimeService
@@ -154,11 +156,12 @@ final class PrinterBridgeViewModel: ObservableObject {
         }
 
         guard enabledPrinterCount == totalPrinterCount else {
-            return "\(enabledPrinterCount) of \(totalPrinterCount) printers are enabled for AirPrint."
+            let verb = enabledPrinterCount == 1 ? "is" : "are"
+            return "\(enabledPrinterCount) of \(totalPrinterCount) printers \(verb) enabled for AirPrint."
         }
 
         if totalPrinterCount == 1 {
-            return "All printers are enabled for AirPrint."
+            return "1 printer is enabled for AirPrint."
         }
 
         return "All \(totalPrinterCount) printers are enabled for AirPrint."
@@ -181,6 +184,7 @@ final class PrinterBridgeViewModel: ObservableObject {
 
     func loadBridgeState(forceBackgroundSync: Bool = false) {
         refreshTask?.cancel()
+        isRefreshingBridgeState = true
 
         do {
             var configuration = try configurationStore.load()
@@ -204,6 +208,7 @@ final class PrinterBridgeViewModel: ObservableObject {
                 }
 
                 applyRefreshPayload(payload, reconcileBackground: shouldSyncBackground)
+                isRefreshingBridgeState = false
             }
         } catch {
             stopActivePublication()
@@ -212,6 +217,7 @@ final class PrinterBridgeViewModel: ObservableObject {
             jobSnapshot = PrintJobQueueSnapshot(queueName: nil, activeJobs: [], completedJobs: [])
             publicationState = .failed(error.localizedDescription)
             bridgeMessage = "Failed to load bridge state: \(error.localizedDescription)"
+            isRefreshingBridgeState = false
         }
     }
 
@@ -263,6 +269,7 @@ final class PrinterBridgeViewModel: ObservableObject {
 
     func reloadJobs() {
         jobsTask?.cancel()
+        isUpdatingJobs = true
         let queueName = bridgeConfiguration.selectedQueueName
         jobsTask = Task {
             let snapshot = await Task.detached(priority: .utility) {
@@ -275,6 +282,7 @@ final class PrinterBridgeViewModel: ObservableObject {
 
             jobSnapshot = snapshot
             jobsMessage = nil
+            isUpdatingJobs = false
         }
     }
 
@@ -285,7 +293,6 @@ final class PrinterBridgeViewModel: ObservableObject {
         }
 
         performJobsOperation(
-            successMessage: "Canceled active jobs.",
             failureMessage: "Could not cancel active jobs."
         ) { [queueName = bridgeConfiguration.selectedQueueName] in
             PrintJobQueueService().cancelAllActiveJobs(forQueueNamed: queueName)
@@ -294,7 +301,6 @@ final class PrinterBridgeViewModel: ObservableObject {
 
     func cancelJob(_ job: PrintJob) {
         performJobsOperation(
-            successMessage: "Canceled \(job.id).",
             failureMessage: "Could not cancel \(job.id)."
         ) {
             PrintJobQueueService().cancelActiveJob(job)
@@ -313,7 +319,6 @@ final class PrinterBridgeViewModel: ObservableObject {
         }
 
         performJobsOperation(
-            successMessage: "Cleared recent jobs.",
             failureMessage: "Could not clear recent jobs."
         ) { [queueName = bridgeConfiguration.selectedQueueName] in
             PrintJobQueueService().purgeAllJobs(forQueueNamed: queueName)
@@ -329,6 +334,7 @@ final class PrinterBridgeViewModel: ObservableObject {
 
     private func persistConfiguration(message: String, forceBackgroundSync: Bool = true) {
         refreshTask?.cancel()
+        isRefreshingBridgeState = true
         let configurationToSave = bridgeConfiguration
         let configURL = configurationStore.configURL
         bridgeMessage = message
@@ -351,6 +357,7 @@ final class PrinterBridgeViewModel: ObservableObject {
                 }
 
                 applyRefreshPayload(payload, reconcileBackground: forceBackgroundSync)
+                isRefreshingBridgeState = false
             } catch {
                 guard !Task.isCancelled else {
                     return
@@ -358,16 +365,17 @@ final class PrinterBridgeViewModel: ObservableObject {
 
                 publicationState = .failed(error.localizedDescription)
                 bridgeMessage = "Failed to save settings: \(error.localizedDescription)"
+                isRefreshingBridgeState = false
             }
         }
     }
 
     private func performJobsOperation(
-        successMessage: String,
         failureMessage: String,
         operation: @escaping @Sendable () -> Bool
     ) {
         jobsTask?.cancel()
+        isUpdatingJobs = true
         jobsTask = Task {
             let succeeded = await Task.detached(priority: .utility, operation: operation).value
 
@@ -376,10 +384,10 @@ final class PrinterBridgeViewModel: ObservableObject {
             }
 
             if succeeded {
-                jobsMessage = successMessage
                 reloadJobs()
             } else {
                 jobsMessage = failureMessage
+                isUpdatingJobs = false
             }
         }
     }

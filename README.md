@@ -1,139 +1,182 @@
-# Printer Bridge
-
 <p align="center">
-  <img src="docs/assets/printer-bridge-icon-transparent-232.png" width="160" alt="Printer Bridge app icon">
+  <img src="docs/assets/printer-bridge-icon-transparent-232.png" width="128" alt="Printer Bridge app icon">
 </p>
 
-Printer Bridge enables AirPrint on older printers so you can print from an iPhone, iPad, or Mac. If a printer already works from your Mac, Printer Bridge can usually make it available to other Apple devices on the same local network.
+<h1 align="center">Printer Bridge</h1>
 
-Printer Bridge is free, open source, and built for macOS 15 or later. It supports both Apple Silicon and Intel Macs.
+<p align="center">
+  <strong>Give the printers already connected to your Mac a modern AirPrint experience.</strong>
+  <br>
+  Print documents and high-quality photos from iPhone, iPad, or Mac—locally, privately, and without a cloud subscription.
+</p>
 
-[Learn more](https://www.generouscorp.com/printer-bridge/)
+<p align="center">
+  <img alt="macOS 15 or later" src="https://img.shields.io/badge/macOS-15%2B-0A84FF?style=flat-square&logo=apple&logoColor=white">
+  <img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-F05138?style=flat-square&logo=swift&logoColor=white">
+  <img alt="Apple Silicon and Intel" src="https://img.shields.io/badge/Mac-Apple%20Silicon%20%7C%20Intel-24292F?style=flat-square&logo=apple&logoColor=white">
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-22A699?style=flat-square"></a>
+</p>
 
-## Download
+<p align="center">
+  <a href="#quick-start"><strong>Build and run</strong></a>
+  ·
+  <a href="https://github.com/danielraffel/printer-bridge/releases"><strong>Upstream releases</strong></a>
+  ·
+  <a href="#printing-options"><strong>Printing options</strong></a>
+</p>
 
-For most people, the signed and notarized release is the best way to install Printer Bridge:
+---
 
-- [Download the latest DMG](https://github.com/danielraffel/printer-bridge/releases/latest/download/Printer-Bridge.dmg)
-- [View all GitHub releases](https://github.com/danielraffel/printer-bridge/releases)
+## Your Mac printer, now on iPhone
 
-Open the DMG, run `Install Printer Bridge.pkg`, and then launch Printer Bridge from the Applications folder.
+Printer Bridge discovers printer queues that already work on macOS, publishes them through Bonjour, and translates AirPrint jobs into the settings understood by the installed printer driver.
 
-## Requirements
+<table>
+  <tr>
+    <td width="68%" align="center">
+      <img src="docs/assets/readme/macos-printers.jpg" alt="Printer Bridge macOS app showing live and available printers">
+    </td>
+    <td width="32%" align="center">
+      <img src="docs/assets/readme/iphone-airprint-options.jpg" alt="iPhone AirPrint options for an Epson L8050 through Printer Bridge">
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Manage every local printer from a clear native macOS dashboard.</sub></td>
+    <td align="center"><sub>Choose colour, paper size, media, and quality from the iPhone print sheet.</sub></td>
+  </tr>
+</table>
 
-- macOS 15 or later
-- An Apple Silicon or Intel Mac
-- A printer that already prints successfully from that Mac
-- The Mac and AirPrint device connected to the same local network
-- The Mac awake while you want AirPrint to remain available
+## Made for documents and photos
 
-Printer Bridge does not normally require macOS Printer Sharing. It runs its own local AirPrint proxy and forwards jobs to the printer queue already configured on the Mac.
+| Everyday printing | Photo printing |
+| --- | --- |
+| A4, Letter, envelopes, and driver-supported sizes | 4 × 6, 5 × 7, 5 × 8, 8 × 10, and driver-supported photo sizes |
+| Colour or monochrome output | Glossy, matte, semi-gloss, and other photo media |
+| Draft, normal, and best quality | High-quality driver modes and advertised resolutions |
+| Portrait and landscape orientation | Bordered or borderless output when the driver supports it |
+| Copies and page ranges | Fit or centre-fill scaling with orientation-aware cropping |
 
-## Features
+The media and quality choices shown on an Apple device come from the selected macOS printer driver. Printer Bridge converts standard IPP/AirPrint choices into the appropriate CUPS driver options. The extended photo workflow has been developed and tested with the **Epson L8050**.
 
-- Share existing macOS printer queues through AirPrint
-- Print from iPhone, iPad, and Mac
-- Choose supported paper sizes and media types, including plain and photo paper
-- Enable one or more printers
-- View recent jobs and queue activity
-- Give printers cleaner AirPrint names
-- Keep sharing active through a background service
-- Use system, light, or dark appearance
-- Keep printing local, with no cloud service, analytics, tracking, or advertising
+## Highlights
 
-## How it works
+- **Native AirPrint** — print from the standard share sheet in Photos, Safari, Files, Mail, and other Apple apps.
+- **Multiple printers** — publish one or more macOS queues independently.
+- **Real printer controls** — expose supported media sizes, media types, quality, colour mode, orientation, and resolution.
+- **Better borderless photos** — remove symmetric PDF padding and centre-fill the requested sheet without stretching the image.
+- **Queue visibility** — monitor active jobs, inspect recent jobs, and cancel or clear them from the app.
+- **Background sharing** — keep printers available after closing the main window.
+- **Local and private** — no account, cloud relay, analytics, tracking, or advertising.
+- **Universal Mac app** — supports Apple Silicon and Intel on macOS 15 or later.
 
-Printer Bridge advertises an AirPrint-compatible printer over Bonjour and accepts IPP print jobs through a local proxy. It then sends those jobs to CUPS, the printing system macOS already uses for the selected printer.
+## Quick start
 
-The app consists of:
+### Install a release
 
-- A SwiftUI configuration and queue-management app
-- A Swift 6 core library for printer discovery, IPP handling, and job routing
-- A per-user background agent managed by macOS Service Management
-- A local AirPrint/IPP proxy advertised as `_ipp._tcp,_universal`
+The signed and notarized upstream release is the simplest starting point:
 
-Printing stays on the Mac and local network.
+1. [Download the latest DMG](https://github.com/danielraffel/printer-bridge/releases/latest/download/Printer-Bridge.dmg).
+2. Open the DMG and run `Install Printer Bridge.pkg`.
+3. Launch Printer Bridge from Applications.
+4. Turn on AirPrint beside the printer you want to share.
+5. On iPhone or iPad, open **Print**, choose the bridged printer, and select the paper and quality options you need.
 
-## AirPrint options
+> [!NOTE]
+> The upstream release may not yet contain changes that exist on this fork's `main` branch. Build from source below to use the newest code in this repository.
 
-Printer Bridge translates standard AirPrint job settings into the options exposed by the selected macOS printer driver. When the driver supports them, the iPhone or iPad print sheet can offer:
+### Build this version from source
 
-- Plain, coated, glossy, high-gloss, matte, semi-gloss, label, envelope, and letterhead media
-- Draft, normal, and best print quality
-- Color and monochrome printing
-- Driver-supported document and photo sizes such as A4, 4 × 6, 5 × 7, 5 × 8, and 8 × 10 inches
-- Bordered and borderless variants based on the margins requested by the printing app
-- Copies, orientation, resolution, and fit/fill scaling
-
-The available choices come from the installed driver, so they vary by printer. Photo apps commonly request a borderless size automatically; document apps normally request the bordered variant.
-
-For borderless photo jobs using automatic or fill scaling, Printer Bridge removes symmetric white padding that an app has baked into its PDF and center-fills the selected sheet. An explicit **Fit** choice is preserved, so users can keep the whole image with borders when preferred.
-
-## Build from source
-
-Building requires:
-
-- Xcode with the macOS 15 SDK or later
-- Swift 6
-- [XcodeGen](https://github.com/yonaskolb/XcodeGen) 2.44 or later
-
-Install XcodeGen with Homebrew, clone the repository, and run the build script:
+You will need Xcode with the macOS 15 SDK, Swift 6, and [XcodeGen](https://github.com/yonaskolb/XcodeGen) 2.44 or later.
 
 ```sh
 brew install xcodegen
-git clone https://github.com/danielraffel/printer-bridge.git
+git clone https://github.com/harishvishwakarma/printer-bridge.git
 cd printer-bridge
 ./scripts/dev/build-macos.sh
+open ".build/dist/Printer Bridge.app"
 ```
 
-The script builds and combines Apple Silicon and Intel slices. The universal app is written to:
+The build script creates a signed universal app containing both Apple Silicon and Intel binaries. It uses a Developer ID certificate when one is available and otherwise falls back to ad hoc signing for local development.
+
+## Printing options
+
+When supported by the installed driver, Printer Bridge can advertise:
+
+- Plain, coated, glossy, high-gloss, matte, semi-gloss, label, envelope, and letterhead media
+- Draft, normal, and best print quality
+- Colour and monochrome printing
+- A4, US Letter, 4 × 6, 5 × 7, 5 × 8, 8 × 10, and additional driver-defined sizes
+- Bordered and borderless media variants
+- Copies, page range, orientation, resolution, and fit/fill scaling
+
+Photo apps often request a borderless size automatically, while document apps normally request the bordered variant. An explicit **Fit** request is preserved; automatic or **Fill** photo jobs may be centre-filled to remove unwanted symmetric white padding.
+
+## How it works
 
 ```text
-.build/dist/Printer Bridge.app
+iPhone / iPad / Mac
+        │  AirPrint · IPP · Bonjour
+        ▼
+Printer Bridge on macOS
+        │  validates and translates job settings
+        ▼
+macOS CUPS queue + installed printer driver
+        │
+        ▼
+Your printer
 ```
 
-If a Developer ID Application certificate is available, the script uses it. Otherwise it applies an ad hoc signature suitable for local development. Use the notarized GitHub release for normal installation and reliable background-service operation.
+The project contains:
 
-Run the shared core tests with:
+- A native SwiftUI app for printers, jobs, and settings
+- A Swift 6 core library for discovery, IPP handling, media capabilities, and job routing
+- A per-user background agent managed by macOS Service Management
+- A local AirPrint proxy advertised as `_ipp._tcp,_universal`
+
+Printer Bridge does not normally require macOS Printer Sharing. The Mac must be awake, and the Apple device must be able to reach it on the local network. AirPrint discovery is local-network-first; remote printing requires a network or VPN setup that carries both IP traffic and Bonjour/mDNS discovery.
+
+## Development
+
+Run all shared core tests:
 
 ```sh
 ./scripts/dev/test-core.sh
 ```
 
-To generate the Xcode project and work in Xcode:
+Generate and open the Xcode project:
 
 ```sh
 ./scripts/dev/generate-xcode-project.sh
 open apps/macos/PrinterBridge.xcodeproj
 ```
 
-The generated project provides these schemes:
-
-- `PrinterBridge` — macOS app and background agent
-- `PrinterBridgeDev` — app, background agent, and development CLI
-- `PrinterBridgeCLI` — command-line diagnostics only
-
-Build the standalone universal diagnostics CLI with:
+Build the universal diagnostics CLI:
 
 ```sh
 ./scripts/dev/build-cli.sh
 ```
 
-## Repository layout
+| Path | Purpose |
+| --- | --- |
+| `apps/macos/` | SwiftUI app, background agent, and diagnostics CLI |
+| `packages/core/` | Shared printing, IPP, Bonjour, CUPS, and media logic |
+| `scripts/dev/` | Project generation, local builds, and tests |
+| `scripts/release/` | Signed package and DMG release tooling |
+| `scripts/validate/` | Local printer and AirPrint diagnostics |
+| `docs/` | Website, screenshots, research, and legal pages |
 
-- `apps/macos/` — SwiftUI app, background agent, and development CLI
-- `packages/core/` — shared Swift package and tests
-- `scripts/dev/` — project generation, builds, and tests
-- `scripts/release/` — signed PKG and DMG release tooling
-- `scripts/validate/` — local AirPrint and printer diagnostics
-- `docs/` — website, screenshots, and legal documents
+## Privacy and security
 
-## Support and contributing
+Print jobs travel between the Apple device, the Mac, and the configured printer. Printer Bridge does not upload documents, require an account, or add analytics. Review network and printer access as you would for any local print server, especially on shared or untrusted networks.
 
-- [Report a bug](https://github.com/danielraffel/printer-bridge/issues/new?template=bug_report.yml)
-- [Request a feature](https://github.com/danielraffel/printer-bridge/issues/new?template=feature_request.yml)
-- Pull requests are welcome
+## Contributing
 
-Printer Bridge is available under the [MIT License](LICENSE).
+Issues and pull requests are welcome. If you are reporting a printer-specific problem, include the macOS version, printer model, installed driver, selected media and quality settings, and whether the same job prints correctly from a native Mac application.
 
-AirPrint, iPhone, iPad, Mac, and macOS are trademarks of Apple. Printer Bridge is not affiliated with Apple.
+- [Report an issue](https://github.com/harishvishwakarma/printer-bridge/issues)
+- [View the upstream project](https://github.com/danielraffel/printer-bridge)
+- [Read the MIT License](LICENSE)
+
+<p align="center">
+  <sub>AirPrint, iPhone, iPad, Mac, and macOS are trademarks of Apple. Printer Bridge is not affiliated with Apple.</sub>
+</p>

@@ -4,12 +4,17 @@ import SwiftUI
 struct HelpView: View {
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Text(ProjectMetadata.appDisplayName)
-                    .font(.title2.weight(.semibold))
+            VStack(alignment: .leading, spacing: PrinterBridgeDesign.Space.lg) {
+                VStack(alignment: .leading, spacing: PrinterBridgeDesign.Space.xs) {
+                    Text("Printer Bridge Help")
+                        .font(.largeTitle.weight(.bold))
+                    Text("Share Mac printers with iPhone and iPad through AirPrint.")
+                        .foregroundStyle(.secondary)
+                }
 
                 helpSection(
                     "What It Does",
+                    systemImage: "airplayaudio",
                     [
                         "Turn on AirPrint sharing for printers already installed on this Mac.",
                         "Keep older printers useful longer instead of turning working equipment into e-waste.",
@@ -19,6 +24,7 @@ struct HelpView: View {
 
                 helpSection(
                     "Printer States",
+                    systemImage: "dot.radiowaves.left.and.right",
                     [
                         "`Live` means this printer is being advertised over AirPrint right now.",
                         "`Off` means Printer Bridge is not sharing that printer.",
@@ -29,6 +35,7 @@ struct HelpView: View {
 
                 helpSection(
                     "Jobs",
+                    systemImage: "list.bullet.rectangle",
                     [
                         "`Refresh` reloads the current queue from CUPS.",
                         "`Cancel Active` stops jobs that are still in progress at the Mac queue.",
@@ -37,7 +44,8 @@ struct HelpView: View {
                 )
 
                 helpSection(
-                    "Advanced",
+                    "Settings",
+                    systemImage: "gearshape",
                     [
                         "`Keep sharing in the background` installs and uses the bundled background service so AirPrint stays available after the window closes.",
                         "`AirPrint name` lets you publish a friendlier printer name than the raw CUPS queue name.",
@@ -45,36 +53,56 @@ struct HelpView: View {
                     ]
                 )
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Open Source")
+                VStack(alignment: .leading, spacing: PrinterBridgeDesign.Space.sm) {
+                    Label("Open Source", systemImage: "chevron.left.forwardslash.chevron.right")
                         .font(.headline)
 
-                    Text("Source code is available on GitHub, along with the project's terms, privacy policy, bug reporting, and feature request templates.")
-                        .foregroundStyle(.secondary)
+                    PrinterBridgeCard {
+                        VStack(alignment: .leading, spacing: PrinterBridgeDesign.Space.sm) {
+                            Text("Read the source, report a problem, or suggest an improvement.")
+                                .foregroundStyle(.secondary)
 
-                    Link("View Source on GitHub", destination: URL(string: ProjectMetadata.repositoryURL)!)
-                    Link("Report a Bug", destination: URL(string: ProjectMetadata.bugReportURL)!)
-                    Link("Request a Feature", destination: URL(string: ProjectMetadata.featureRequestURL)!)
-                    Link("Privacy Policy", destination: URL(string: ProjectMetadata.privacyURL)!)
-                    Link("Terms", destination: URL(string: ProjectMetadata.termsURL)!)
+                            Link("View source on GitHub", destination: URL(string: ProjectMetadata.repositoryURL)!)
+                            Link("Report a bug", destination: URL(string: ProjectMetadata.bugReportURL)!)
+                            Link("Request a feature", destination: URL(string: ProjectMetadata.featureRequestURL)!)
+
+                            Divider()
+
+                            HStack(spacing: PrinterBridgeDesign.Space.md) {
+                                Link("Privacy policy", destination: URL(string: ProjectMetadata.privacyURL)!)
+                                Link("Terms", destination: URL(string: ProjectMetadata.termsURL)!)
+                            }
+                            .font(.footnote)
+                        }
+                    }
                 }
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(PrinterBridgeDesign.Space.lg)
+            .frame(maxWidth: 720, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .frame(width: 500, height: 560)
+        .frame(minWidth: 540, minHeight: 500)
     }
 
-    private func helpSection(_ title: String, _ items: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
+    private func helpSection(_ title: String, systemImage: String, _ items: [String]) -> some View {
+        VStack(alignment: .leading, spacing: PrinterBridgeDesign.Space.sm) {
+            Label(title, systemImage: systemImage)
                 .font(.headline)
 
-            ForEach(items, id: \.self) { item in
-                Text(item)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            PrinterBridgeCard {
+                VStack(alignment: .leading, spacing: PrinterBridgeDesign.Space.sm) {
+                    ForEach(items, id: \.self) { item in
+                        HStack(alignment: .firstTextBaseline, spacing: PrinterBridgeDesign.Space.xs) {
+                            Image(systemName: "circle.fill")
+                                .font(.system(size: 5))
+                                .foregroundStyle(.tertiary)
+                                .accessibilityHidden(true)
+                            Text(.init(item))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
             }
         }
     }

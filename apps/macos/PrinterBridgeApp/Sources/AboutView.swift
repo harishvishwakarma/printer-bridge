@@ -4,50 +4,74 @@ import SwiftUI
 
 struct AboutView: View {
     var body: some View {
-        VStack(spacing: 18) {
-            Image(nsImage: NSApplication.shared.applicationIconImage)
-                .resizable()
-                .interpolation(.high)
-                .frame(width: 96, height: 96)
-                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                .shadow(color: .black.opacity(0.18), radius: 12, y: 6)
+        ScrollView {
+            VStack(alignment: .leading, spacing: PrinterBridgeDesign.Space.lg) {
+                HStack(spacing: PrinterBridgeDesign.Space.md) {
+                    Image(nsImage: NSApplication.shared.applicationIconImage)
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: 84, height: 84)
+                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .accessibilityHidden(true)
 
-            VStack(spacing: 6) {
-                Text(ProjectMetadata.appDisplayName)
-                    .font(.title.weight(.semibold))
+                    VStack(alignment: .leading, spacing: PrinterBridgeDesign.Space.xxs) {
+                        Text(ProjectMetadata.appDisplayName)
+                            .font(.largeTitle.weight(.bold))
+                        Text(ProjectMetadata.appStoreName)
+                            .foregroundStyle(.secondary)
+                        Text(versionDescription)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
 
-                Text(ProjectMetadata.appStoreName)
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-            }
+                Text("Keep working printers useful by making them available to Apple devices through AirPrint.")
+                    .font(.title3)
+                    .fixedSize(horizontal: false, vertical: true)
 
-            Text("Let's keep more hardware from becoming unnecessary e-waste.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+                PrinterBridgeCard {
+                    VStack(alignment: .leading, spacing: PrinterBridgeDesign.Space.sm) {
+                        Text("Compatibility")
+                            .font(.headline)
+                        Text("Printer Bridge works with printers that already print successfully from this Mac. It has been exercised with Epson L8050 and Brother HL-2170W series printers; other macOS printer queues are expected to work as well.")
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
 
-            VStack(spacing: 10) {
-                Link("View Source on GitHub", destination: URL(string: ProjectMetadata.repositoryURL)!)
-                Link("Report a Bug", destination: URL(string: ProjectMetadata.bugReportURL)!)
-                Link("Request a Feature", destination: URL(string: ProjectMetadata.featureRequestURL)!)
-            }
-            .font(.body)
+                VStack(alignment: .leading, spacing: PrinterBridgeDesign.Space.sm) {
+                    Link("View source on GitHub", destination: URL(string: ProjectMetadata.repositoryURL)!)
+                    Link("Report a bug", destination: URL(string: ProjectMetadata.bugReportURL)!)
+                    Link("Request a feature", destination: URL(string: ProjectMetadata.featureRequestURL)!)
+                }
 
-            Divider()
+                Divider()
 
-            HStack(spacing: 18) {
-                Link("Privacy Policy", destination: URL(string: ProjectMetadata.privacyURL)!)
-                Link("Terms", destination: URL(string: ProjectMetadata.termsURL)!)
-            }
-            .font(.footnote)
-
-            Text("Printer Bridge is designed to work with printers that already print successfully from this Mac. Tested with Brother HL-2170W series. Other printers are likely to work if they already print normally through macOS.")
+                HStack(spacing: PrinterBridgeDesign.Space.md) {
+                    Link("Privacy policy", destination: URL(string: ProjectMetadata.privacyURL)!)
+                    Link("Terms", destination: URL(string: ProjectMetadata.termsURL)!)
+                }
                 .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(PrinterBridgeDesign.Space.lg)
+            .frame(maxWidth: 560, alignment: .leading)
         }
-        .padding(24)
-        .frame(width: 470, height: 440)
+        .frame(minWidth: 460, minHeight: 460)
+    }
+
+    private var versionDescription: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+
+        switch (version, build) {
+        case let (.some(version), .some(build)) where version != build:
+            return "Version \(version) (\(build))"
+        case let (.some(version), _):
+            return "Version \(version)"
+        case let (_, .some(build)):
+            return "Build \(build)"
+        default:
+            return "Development build"
+        }
     }
 }
