@@ -7,6 +7,9 @@ func productIdentityMatchesRepoPlan() {
     #expect(ProjectMetadata.appDisplayName == "Printer Bridge")
     #expect(ProjectMetadata.appStoreName == "Printer Bridge for AirPrint")
     #expect(ProjectMetadata.repositorySlug == "printer-bridge")
+    #expect(ProjectMetadata.repositoryURL == "https://github.com/harishvishwakarma/printer-bridge")
+    #expect(!ProjectMetadata.privacyURL.contains("generouscorp.com"))
+    #expect(!ProjectMetadata.termsURL.contains("generouscorp.com"))
     #expect(ProjectMetadata.minimumSupportedMacOS == "15.0")
     #expect(ProjectMetadata.primaryTargetPrinter == "Brother_HL_2170W_series")
 }

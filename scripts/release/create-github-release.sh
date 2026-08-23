@@ -37,8 +37,8 @@ Printer Bridge $VERSION
 - Signed macOS installer package for Printer Bridge
 - Signed disk image with installer and uninstall command
 - License agreement and install notes included in the installer
-- Privacy Policy: https://www.generouscorp.com/printer-bridge/legal/privacy.html
-- Terms: https://www.generouscorp.com/printer-bridge/legal/terms.html
+- Privacy Policy: https://github.com/harishvishwakarma/printer-bridge/blob/main/docs/legal/privacy.html
+- Terms: https://github.com/harishvishwakarma/printer-bridge/blob/main/docs/legal/terms.html
 
 Download assets:
 - Printer-Bridge.dmg

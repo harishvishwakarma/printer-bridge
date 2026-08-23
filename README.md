@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/printer-bridge-icon-transparent-232.png" width="128" alt="Printer Bridge app icon">
+  <img src="assets/branding/printerbridge-app-icon.svg" width="128" alt="Printer Bridge app icon">
 </p>
 
 <h1 align="center">Printer Bridge</h1>
@@ -86,10 +86,11 @@ The signed and notarized upstream release is the simplest starting point:
 
 ### Build this version from source
 
-You will need Xcode with the macOS 15 SDK, Swift 6, and [XcodeGen](https://github.com/yonaskolb/XcodeGen) 2.44 or later.
+You will need Xcode with the macOS 15 SDK, Swift 6, [XcodeGen](https://github.com/yonaskolb/XcodeGen) 2.44 or later, and `librsvg` for rendering the SVG app icon.
 
 ```sh
 brew install xcodegen
+brew install xcodegen librsvg
 git clone https://github.com/harishvishwakarma/printer-bridge.git
 cd printer-bridge
 ./scripts/dev/build-macos.sh
